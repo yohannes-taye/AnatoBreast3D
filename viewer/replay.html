@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Breast 3D — Replay</title>
+<style>
+  :root { --bg:#0f1216; --panel:#171c22; --line:#2a313a; --ink:#e8edf2; --muted:#909aa6; --teal:#19b9ac; --red:#ff6464; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:ui-sans-serif,system-ui,"Segoe UI",sans-serif; }
+  .app { display:grid; grid-template-rows:auto 1fr; height:100%; }
+  header { display:flex; gap:14px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:700; }
+  header .stat { color:var(--muted); font-size:12px; margin-left:auto; }
+  header a { color:var(--teal); font-size:12px; text-decoration:none; border:1px solid var(--line);
+    padding:4px 10px; border-radius:999px; }
+  header a:hover { border-color:var(--teal); }
+  .main { display:grid; grid-template-columns:320px minmax(0,1fr); min-height:0; }
+  .side { border-right:1px solid var(--line); overflow:auto; padding:10px; display:grid; gap:8px; align-content:start; }
+  .sec-title { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em;
+    display:flex; align-items:center; justify-content:space-between; }
+  .sec-title button { background:var(--panel); color:var(--ink); border:1px solid var(--line);
+    border-radius:6px; padding:3px 8px; font-size:11px; cursor:pointer; }
+  .sec-title button:hover { border-color:var(--teal); }
+  .rec { display:grid; gap:3px; padding:9px 10px; border:1px solid var(--line); border-radius:7px;
+    background:var(--panel); cursor:pointer; }
+  .rec:hover { border-color:var(--teal); }
+  .rec.active { border-color:var(--teal); background:#13201f; }
+  .rec b { font-size:12px; font-variant-numeric:tabular-nums; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rec span { font-size:11px; color:var(--muted); }
+  .empty { color:var(--muted); font-size:12px; padding:8px; line-height:1.6; }
+  .empty code { color:var(--teal); }
+  .stage { position:relative; min-height:0; background:radial-gradient(circle at 50% 40%,#1a2026,#0c0f13); }
+  .stage iframe { width:100%; height:100%; border:0; display:block; }
+  .stage .placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:8px; color:var(--muted); font-size:13px; text-align:center; padding:24px; }
+  .stage .placeholder b { color:var(--ink); font-size:14px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Breast 3D — Replay</h1>
+    <a href="live.html">← Live</a>
+    <span class="stat" id="stat"></span>
+  </header>
+  <div class="main">
+    <aside class="side">
+      <div class="sec-title">Recordings <button id="refreshBtn">Refresh</button></div>
+      <div id="recList"></div>
+    </aside>
+    <div class="stage">
+      <iframe id="rrFrame" title="rerun replay" allow="cross-origin-isolated" hidden></iframe>
+      <div class="placeholder" id="placeholder">
+        <b>Select a recording to replay</b>
+        <span>Recordings are produced by:</span>
+        <code>python tools/live_recon.py --record</code>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+const dom = {
+  list: document.getElementById("recList"),
+  stat: document.getElementById("stat"),
+  frame: document.getElementById("rrFrame"),
+  placeholder: document.getElementById("placeholder"),
+  refresh: document.getElementById("refreshBtn"),
+};
+let active = null;
+
+function fmtTime(epoch) {
+  return new Date(epoch * 1000).toLocaleString();
+}
+
+async function loadList() {
+  let data;
+  try {
+    data = await (await fetch("/api/recordings", { cache: "no-store" })).json();
+  } catch (e) {
+    dom.list.innerHTML = `<div class="empty">Server offline. Start it with<br><code>python tools/serve_recon3d_viewer.py</code></div>`;
+    return;
+  }
+  const recs = data.recordings || [];
+  dom.stat.textContent = `${recs.length} recording${recs.length === 1 ? "" : "s"}`;
+  if (!recs.length) {
+    dom.list.innerHTML = `<div class="empty">No recordings yet.<br>Capture one with<br><code>python tools/live_recon.py --record</code></div>`;
+    return;
+  }
+  dom.list.innerHTML = "";
+  for (const rec of recs) {
+    const el = document.createElement("div");
+    el.className = "rec" + (rec.path === active ? " active" : "");
+    el.innerHTML = `<b>${rec.name}</b><span>${rec.size_mb} MB · ${fmtTime(rec.mtime)}</span>`;
+    el.onclick = () => play(rec, el);
+    dom.list.append(el);
+  }
+}
+
+async function play(rec, el) {
+  active = rec.path;
+  document.querySelectorAll(".rec").forEach((r) => r.classList.remove("active"));
+  el.classList.add("active");
+  dom.placeholder.querySelector("b").textContent = `Starting replay of ${rec.name}…`;
+  dom.placeholder.hidden = false;
+  dom.frame.hidden = true;
+  let res;
+  try {
+    res = await (await fetch("/api/replay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: rec.path }),
+    })).json();
+  } catch (e) {
+    dom.placeholder.querySelector("b").textContent = "Failed to start replay server";
+    return;
+  }
+  if (!res.ok) {
+    dom.placeholder.querySelector("b").textContent = res.error || "Replay failed";
+    return;
+  }
+  // The replay server needs a moment to bind + load the recording; the rerun
+  // viewer reconnects on its own once the stream is up.
+  dom.frame.src = res.url;
+  dom.frame.hidden = false;
+  dom.placeholder.hidden = true;
+}
+
+dom.refresh.onclick = loadList;
+loadList();
+setInterval(loadList, 5000);
+</script>
+</body>
+</html>

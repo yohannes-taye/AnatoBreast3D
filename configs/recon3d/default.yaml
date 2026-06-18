@@ -1,0 +1,50 @@
+output_dir: runs/recon3d_live
+extrinsics_path: configs/recon3d/extrinsics.json
+sync_max_drift_ms: 5.0
+enable_visualization: false
+
+# Hardware camera settings used by:
+#   python -m recon3d.cli run --config configs/recon3d/default.yaml
+#
+# For a formal three-camera run, keep serial_number bound to the physical cameras.
+# Start secondaries before the primary; MultiFemtoBoltRig does this automatically
+# when sync_mode is set below. If hardware sync cable is not connected yet, use
+# sync_mode: standalone for all cameras and expect looser timestamp alignment.
+hardware:
+  align_mode: hw
+  color_format: RGB
+  color_fps: 0
+  color_size: null
+  wait_timeout_ms: 1000
+  apply_sync_config: true
+  cameras:
+    - id: cam0
+      serial_number: "CL8T754004D"
+      sync_mode: secondary
+    - id: cam1
+      serial_number: "CL8T7540197"
+      sync_mode: secondary
+    - id: cam2
+      serial_number: "CL8T75400XA"
+      sync_mode: primary
+
+perception:
+  model_config_path: configs/breastseg/breastseg_b2_inplace.py
+  checkpoint_path: work_dirs/breastseg_b2/best.pth
+  device: cuda
+  score_thr: 0.3
+  topk: 2
+  nms_iou: 0.5
+
+fusion:
+  voxel_size_m: 0.002
+  outlier_nb_neighbors: 20
+  outlier_std_ratio: 2.0
+  estimate_normals: false
+
+nipple3d:
+  dbscan_eps_m: 0.005
+  min_cluster_points: 30
+  covariance_jitter_m2: 1.0e-8
+  left_right_axis_world: [1.0, 0.0, 0.0]
+  mahalanobis_threshold: 3.0

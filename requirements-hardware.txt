@@ -1,0 +1,17 @@
+# Optional hardware bindings for the Orbbec camera workstation.
+#
+# Install the base environment first:
+#
+#   pip install -r requirements.txt
+#
+# Then install hardware bindings:
+#
+#   pip install -r requirements-hardware.txt
+#
+-r requirements.txt
+pyorbbecsdk
+# Live viewer streaming (tools/live_recon.py). 0.23.1 is the last release that
+# supports numpy 1.x; 0.24+ require numpy>=2 which conflicts with pyorbbecsdk2
+# and open3d 0.18. Pin pyarrow to a numpy-1.26-compatible build to match.
+rerun-sdk==0.23.1
+pyarrow==16.1.0

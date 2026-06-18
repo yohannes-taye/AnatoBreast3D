@@ -1,0 +1,38 @@
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+  "checkpoint",
+  "configs",
+  "data",
+  "docs",
+  "examples",
+  "logs",
+  "nets",
+  "tools",
+  "utils",
+  "work_dirs",
+  "__pycache__",
+  "predict.py",
+  "segformer.py",
+  "tests/singleview",
+  "tests/run_breastseg_image_tests.py",
+  "tests/run_breastseg_video_tests.py",
+  "tests/test_dataset.py",
+  "tests/test_forward.py",
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_ignores = true
+disable_error_code = ["type-arg"]
+
+[[tool.mypy.overrides]]
+module = ["cv2", "cv2.*", "open3d", "open3d.*", "torch", "torch.*", "PIL", "PIL.*", "yaml", "pyorbbecsdk"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tools.*", "nets.*", "data_loaders.*", "utils.*"]
+follow_imports = "skip"
+ignore_errors = true

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Breast 3D — Live</title>
+<link rel="stylesheet" href="active_learning.css" />
+<style>
+  :root { --bg:#0f1216; --panel:#171c22; --line:#2a313a; --ink:#e8edf2; --muted:#909aa6; --teal:#19b9ac; --red:#ff6464; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+    font-family:ui-sans-serif,system-ui,"Segoe UI",sans-serif; }
+  .app { display:grid; grid-template-rows:auto 1fr; height:100%; }
+  header { display:flex; gap:14px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:15px; margin:0; font-weight:700; }
+  header .stat { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  header a { margin-left:auto; color:var(--teal); font-size:12px; text-decoration:none;
+    border:1px solid var(--line); padding:4px 10px; border-radius:999px; }
+  header a:hover { border-color:var(--teal); }
+  .main { display:grid; grid-template-columns:minmax(0,1fr) 430px; min-height:0; }
+  .stage { position:relative; min-height:0; background:radial-gradient(circle at 50% 40%,#1a2026,#0c0f13); }
+  .stage iframe { width:100%; height:100%; border:0; display:block; }
+  .stage .placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    flex-direction:column; gap:8px; color:var(--muted); font-size:13px; text-align:center; padding:24px; }
+  .stage .placeholder b { color:var(--ink); font-size:14px; }
+  .stage .placeholder code { color:var(--teal); font-size:12px; }
+  .side { border-left:1px solid var(--line); overflow:auto; padding:10px; display:grid; gap:8px; align-content:start; }
+  .sec-title { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-top:4px; }
+  .pill { padding:3px 8px; border:1px solid var(--line); border-radius:999px; font-size:12px; color:var(--muted); }
+  .pill.live { color:#0c0f13; background:var(--teal); border-color:var(--teal); font-weight:700; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Breast 3D — Live</h1>
+    <span class="pill live" id="liveDot">LIVE</span>
+    <span class="stat" id="stat">connecting…</span>
+    <a href="replay.html">Replay →</a>
+  </header>
+  <div class="main">
+    <div class="stage">
+      <iframe id="rrFrame" title="rerun viewer" allow="cross-origin-isolated" hidden></iframe>
+      <div class="placeholder" id="rrPlaceholder">
+        <b>Waiting for the rerun stream…</b>
+        <span>Start the capture loop:</span>
+        <code>python tools/live_recon.py</code>
+      </div>
+    </div>
+    <aside class="side">
+      <div class="sec-title">Active Learning</div>
+      <div id="activeLearningMount"></div>
+    </aside>
+  </div>
+</div>
+<script>
+"use strict";
+const BASE = "../runs/recon3d_live/";
+const CAMS = ["cam0","cam1","cam2"];
+
+const dom = {
+  stat: document.getElementById("stat"),
+  dot: document.getElementById("liveDot"),
+  frame: document.getElementById("rrFrame"),
+  placeholder: document.getElementById("rrPlaceholder"),
+};
+
+// active_learning.js reads this on load (cams/base) and the manifest live each frame.
+window.liveReconState = { base: BASE, cams: CAMS, manifest: null };
+
+let lastTs = 0;
+let rerunMounted = false;
+
+function mountRerun(url) {
+  if (rerunMounted || !url) return;
+  dom.frame.src = url;
+  dom.frame.hidden = false;
+  dom.placeholder.hidden = true;
+  rerunMounted = true;
+}
+
+async function refresh() {
+  let man;
+  try {
+    man = await (await fetch(BASE + "live_manifest.json", { cache: "no-store" })).json();
+  } catch (e) {
+    dom.stat.textContent = "waiting for live_recon.py…";
+    dom.dot.classList.remove("live");
+    return;
+  }
+  window.liveReconState.manifest = man;
+  dom.dot.classList.add("live");
+  mountRerun(man.rerun_url);
+  if (!man.rerun_url && !rerunMounted) {
+    dom.placeholder.querySelector("b").textContent = "Capture running with --no-rerun (no live view)";
+  }
+  if (man.timestamp !== lastTs) {
+    lastTs = man.timestamp;
+    const pts = Number(man.points || 0).toLocaleString();
+    dom.stat.textContent = `${pts} pts · ${man.fps} fps · frame ${man.frame}`;
+  }
+}
+
+refresh();
+setInterval(refresh, 700);
+</script>
+<script src="active_learning.js"></script>
+</body>
+</html>

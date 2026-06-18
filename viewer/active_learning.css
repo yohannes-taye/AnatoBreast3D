@@ -1,0 +1,202 @@
+.al-card {
+  display:grid;
+  gap:9px;
+  padding:10px;
+  border:1px solid #2a313a;
+  border-radius:8px;
+  background:linear-gradient(180deg,#181f26,#12171d);
+}
+.al-head {
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:10px;
+}
+.al-head b {
+  display:block;
+  font-size:13px;
+  letter-spacing:.02em;
+}
+.al-head span,
+.al-status {
+  color:#909aa6;
+  font-size:11px;
+  font-variant-numeric:tabular-nums;
+}
+.al-badge {
+  border:1px solid #2a313a;
+  border-radius:999px;
+  padding:3px 8px;
+  color:#19b9ac;
+  background:#10201f;
+  white-space:nowrap;
+}
+.al-tabs {
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:6px;
+}
+.al-tabs button,
+.al-actions button,
+.al-tools button {
+  color:#e8edf2;
+  background:#171c22;
+  border:1px solid #2a313a;
+  border-radius:6px;
+  height:32px;
+  font-size:12px;
+  cursor:pointer;
+}
+.al-tabs button.active,
+.al-tools button.active {
+  border-color:#19b9ac;
+  background:#123331;
+  color:#7ff4e7;
+}
+.al-actions {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:6px;
+}
+.al-actions button.primary {
+  background:#19b9ac;
+  border-color:#19b9ac;
+  color:#07110f;
+  font-weight:700;
+}
+.al-actions button.warn {
+  border-color:#725f24;
+  background:#211c10;
+  color:#f2c75b;
+}
+.al-modal[hidden] {
+  display:none;
+}
+.al-modal {
+  position:fixed;
+  inset:0;
+  z-index:50;
+  background:rgba(5,8,12,.78);
+  backdrop-filter:blur(16px);
+  display:grid;
+  place-items:center;
+  padding:22px;
+}
+.al-shell {
+  width:min(1380px,96vw);
+  height:min(850px,92vh);
+  border:1px solid #303946;
+  border-radius:10px;
+  background:#0f141a;
+  box-shadow:0 24px 80px rgba(0,0,0,.45);
+  display:grid;
+  grid-template-rows:auto 1fr;
+  overflow:hidden;
+}
+.al-top {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:12px 14px;
+  border-bottom:1px solid #2a313a;
+  background:#151b22;
+}
+.al-title {
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.al-title b {
+  font-size:15px;
+}
+.al-title span {
+  color:#909aa6;
+  font-size:12px;
+}
+.al-close {
+  width:34px;
+  height:34px;
+  border-radius:6px;
+  border:1px solid #2a313a;
+  background:#11171d;
+  color:#e8edf2;
+  cursor:pointer;
+}
+.al-work {
+  min-height:0;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 270px;
+}
+.al-canvas-wrap {
+  position:relative;
+  min-height:0;
+  background:#090c10;
+  display:grid;
+  place-items:center;
+  overflow:hidden;
+}
+#alCanvas {
+  max-width:100%;
+  max-height:100%;
+  width:auto;
+  height:auto;
+  display:block;
+  cursor:crosshair;
+}
+.al-tools {
+  border-left:1px solid #2a313a;
+  background:#12171d;
+  padding:12px;
+  display:grid;
+  gap:12px;
+  align-content:start;
+}
+.al-tool-grid {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:6px;
+}
+.al-field {
+  display:grid;
+  gap:6px;
+}
+.al-field label {
+  color:#909aa6;
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+}
+.al-field input[type="range"] {
+  width:100%;
+}
+.al-stat-line {
+  display:grid;
+  gap:4px;
+  padding:9px;
+  border:1px solid #2a313a;
+  border-radius:6px;
+  background:#0f141a;
+}
+.al-stat-line span {
+  font-size:12px;
+  color:#cbd4dc;
+  font-variant-numeric:tabular-nums;
+}
+.al-save {
+  height:38px !important;
+  background:#19b9ac !important;
+  border-color:#19b9ac !important;
+  color:#07110f !important;
+  font-weight:800;
+}
+.al-danger {
+  border-color:#5a2a31 !important;
+  background:#221217 !important;
+  color:#ff9aa8 !important;
+}
+.al-muted {
+  color:#909aa6;
+  font-size:11px;
+  line-height:1.4;
+}

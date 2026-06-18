@@ -1,0 +1,35 @@
+{
+  "board": {
+    "name": "charuco_5x5_50mm",
+    "dictionary": "DICT_7X7_50",
+    "squares_x": 5,
+    "squares_y": 5,
+    "square_length_m": 0.05,
+    "marker_length_m": 0.04
+  },
+  "world": "board",
+  "summary": {
+    "num_cameras": 3,
+    "mean_reprojection_error_px": 0.23323878027725178,
+    "max_reprojection_error_px": 0.7615139691270041,
+    "mean_error_gt_1px": 0,
+    "max_error_gt_2px": 0
+  },
+  "cameras": {
+    "cam1": {
+      "mean_reprojection_error_px": 0.2486876479177377,
+      "max_reprojection_error_px": 0.5736181533201135,
+      "num_corners": 16
+    },
+    "cam2": {
+      "mean_reprojection_error_px": 0.3108529308253042,
+      "max_reprojection_error_px": 0.7615139691270041,
+      "num_corners": 16
+    },
+    "cam0": {
+      "mean_reprojection_error_px": 0.14017576208871355,
+      "max_reprojection_error_px": 0.22924616599672562,
+      "num_corners": 6
+    }
+  }
+}
