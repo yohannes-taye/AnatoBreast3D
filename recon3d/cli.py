@@ -57,7 +57,7 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
             model_config_path=Path(
                 perception_raw.get("model_config_path", "configs/breastseg/breastseg_b2_inplace.py")
             ),
-            checkpoint_path=Path(perception_raw.get("checkpoint_path", "work_dirs/breastseg_b2/best.pth")),
+            checkpoint_path=Path(perception_raw.get("checkpoint_path", "checkpoint/breastseg.pth")),
             device=str(perception_raw.get("device", "cuda")),
             score_thr=float(perception_raw.get("score_thr", 0.3)),
             topk=int(perception_raw.get("topk", 2)),

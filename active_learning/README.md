@@ -12,4 +12,4 @@ BreastSeg training layout:
 - `splits/val.txt`
 
 `active_learning/configs/breastseg_active.py` is a short fine-tuning config that
-reuses the current BreastSegFormer training code.
+reuses the current MammaSegNet training code.

@@ -1,4 +1,4 @@
-"""Training entry for BreastSegFormer multi-task pipeline."""
+"""Training entry for MammaSegNet multi-task pipeline."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from data_loaders.breast_coco import BreastCocoDataset, breast_collate_fn
-from nets.segmentors.breastseg_multitask import BreastSegFormer
+from nets.segmentors.breastseg_multitask import MammaSegNet
 from utils.utils import seed_everything
 
 
@@ -42,7 +42,7 @@ def setup_logger(work_dir: str, log_filename: str = "train.log") -> logging.Logg
     log_path = os.path.join(work_dir, log_filename)
 
     # Create logger
-    logger = logging.getLogger("BreastSegFormer")
+    logger = logging.getLogger("MammaSegNet")
     logger.setLevel(logging.INFO)
     logger.handlers.clear()  # Clear existing handlers
 
@@ -127,11 +127,11 @@ def build_dataloaders(cfg: Dict[str, Any], data_root: str, batch_size: int) -> t
     return train_loader, val_loader
 
 
-def build_model(cfg: Dict[str, Any], device: torch.device, init_from: str | None) -> BreastSegFormer:
+def build_model(cfg: Dict[str, Any], device: torch.device, init_from: str | None) -> MammaSegNet:
     model_cfg = cfg["model"].copy()
     if init_from:
         model_cfg["init_from"] = init_from
-    model = BreastSegFormer(
+    model = MammaSegNet(
         num_classes=model_cfg.get("num_classes", 2),
         phi=model_cfg.get("phi", "b2"),
         init_from=model_cfg.get("init_from"),
@@ -168,7 +168,7 @@ def lr_lambda(epoch: int, cfg: Dict[str, Any]) -> float:
 
 
 def train_one_epoch(
-    model: BreastSegFormer,
+    model: MammaSegNet,
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler | None,
@@ -246,7 +246,7 @@ def train_one_epoch(
 
 
 def evaluate(
-    model: BreastSegFormer,
+    model: MammaSegNet,
     loader: DataLoader,
     device: torch.device,
     eval_cfg: Dict[str, Any],
@@ -382,7 +382,7 @@ def save_checkpoint(model: nn.Module, path: str, logger: logging.Logger) -> None
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train BreastSegFormer multi-task model.")
+    parser = argparse.ArgumentParser(description="Train MammaSegNet multi-task model.")
     parser.add_argument("--config", required=True, help="Path to config python file.")
     parser.add_argument("--data-root", required=False, help="Dataset root directory.")
     parser.add_argument("--init-from", required=False, help="Override initialization checkpoint.")
@@ -496,7 +496,7 @@ def main() -> None:
     logger.info(f"Total Epochs: {cfg['solver']['epochs']}")
     logger.info(f"All checkpoints saved in: {work_dir}")
     logger.info("="*80)
-    logger.info("\n✅ DONE: BreastSegFormer (B2) training pipeline ready for inference.")
+    logger.info("\n✅ DONE: MammaSegNet (B2) training pipeline ready for inference.")
 
 
 if __name__ == "__main__":

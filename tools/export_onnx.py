@@ -1,4 +1,4 @@
-"""Export BreastSegFormer to ONNX."""
+"""Export MammaSegNet to ONNX."""
 
 from __future__ import annotations
 

@@ -9,7 +9,7 @@ CONFIG = {
     "model": {
         "num_classes": 2,
         "phi": "b2",
-        "init_from": "./work_dirs/breastseg_b2/best.pth",
+        "init_from": "./checkpoint/breastseg.pth",
         "use_prior": True,
         "sigma_ratio": 0.02,
         "loss_weights": {"seg": 1.0, "det": 0.25, "boundary": 0.1},

@@ -6,7 +6,7 @@ segmentation and nipple detection models remain the existing implementation.
 ## 1. Environment
 
 ```bash
-conda activate segformer
+conda activate breastseg
 python --version
 pip install -r requirements.txt
 ```
@@ -46,7 +46,7 @@ Important fields:
 extrinsics_path: configs/recon3d/extrinsics.json
 perception:
   model_config_path: configs/breastseg/breastseg_b2_inplace.py
-  checkpoint_path: work_dirs/breastseg_b2/best.pth
+  checkpoint_path: checkpoint/breastseg.pth
 fusion:
   voxel_size_m: 0.002
 nipple3d:
@@ -130,7 +130,7 @@ confidence, used cameras, and rejected cameras.
 ## 8. Validate
 
 ```bash
-conda run -n segformer python -m pytest
-conda run -n segformer ruff check .
-conda run -n segformer mypy recon3d --strict
+conda run -n breastseg python -m pytest
+conda run -n breastseg ruff check .
+conda run -n breastseg mypy recon3d --strict
 ```

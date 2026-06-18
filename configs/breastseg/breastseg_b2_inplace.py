@@ -1,4 +1,4 @@
-﻿"""Reference config for in-place BreastSegFormer (MiT-B2)."""
+﻿"""Reference config for in-place MammaSegNet (MiT-B2)."""
 
 CONFIG = {
     "experiment": {

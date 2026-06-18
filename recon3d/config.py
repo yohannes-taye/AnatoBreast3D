@@ -319,7 +319,7 @@ class FusionConfig:
 
 @dataclass(frozen=True)
 class PerceptionConfig:
-    """Existing BreastSegFormer adapter configuration.
+    """Existing MammaSegNet adapter configuration.
 
     Input shape/unit/frame: paths are local filesystem paths; score threshold
     is unitless detector confidence.
@@ -327,7 +327,7 @@ class PerceptionConfig:
     """
 
     model_config_path: Path = Path("configs/breastseg/breastseg_b2_inplace.py")
-    checkpoint_path: Path = Path("work_dirs/breastseg_b2/best.pth")
+    checkpoint_path: Path = Path("checkpoint/breastseg.pth")
     device: str = "cuda"
     score_thr: float = 0.3
     topk: int = 2

@@ -1,4 +1,4 @@
-"""Inference demo for BreastSegFormer."""
+"""Inference demo for MammaSegNet."""
 
 from __future__ import annotations
 

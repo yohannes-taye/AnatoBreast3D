@@ -1,14 +1,14 @@
-"""Smoke tests for BreastSegFormer forward paths."""
+"""Smoke tests for MammaSegNet forward paths."""
 
 from __future__ import annotations
 
 import torch
 
-from nets.segmentors.breastseg_multitask import BreastSegFormer
+from nets.segmentors.breastseg_multitask import MammaSegNet
 
 
 def test_forward_train_and_predict() -> None:
-    model = BreastSegFormer(num_classes=2, phi="b0", init_from=None)
+    model = MammaSegNet(num_classes=2, phi="b0", init_from=None)
     model.train()
     images = torch.randn(2, 3, 128, 128)
     gt_seg = torch.zeros(2, 128, 128, dtype=torch.long)

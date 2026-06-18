@@ -1,4 +1,4 @@
-"""Multi-task SegFormer model for breast segmentation and nipple detection."""
+"""Multi-task MammaSeg model for breast segmentation and nipple detection."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from torch import Tensor, nn
 import torch.nn.functional as F
 
 from nets.backbone import mit_b0, mit_b1, mit_b2, mit_b3, mit_b4, mit_b5
-from nets.decode_heads.segformer_head_with_prior import SegFormerHeadWithPrior
+from nets.decode_heads.mammaseg_prior_head import MammaSegPriorHead
 from nets.dense_heads.nipple_fcos_head import DetectionPred, NippleFCOSHead
 from nets.necks.light_fpn import LightFPN
 from nets.utils.prior_builder import build_prior_from_preds, build_prior_from_targets
@@ -26,7 +26,7 @@ BACKBONE_CFG = {
 }
 
 
-class BreastSegFormer(nn.Module):
+class MammaSegNet(nn.Module):
     """Encapsulates backbone, decode head, and detection head."""
 
     def __init__(
@@ -44,7 +44,7 @@ class BreastSegFormer(nn.Module):
             raise ValueError(f"Unsupported backbone '{phi}'.")
         cfg = BACKBONE_CFG[phi]
         self.backbone = cfg["factory"](pretrained=False)
-        self.decode_head = SegFormerHeadWithPrior(
+        self.decode_head = MammaSegPriorHead(
             num_classes=num_classes,
             in_channels=cfg["channels"],
             embedding_dim=cfg["embed"],
@@ -253,7 +253,7 @@ class BreastSegFormer(nn.Module):
     def load_init_from_checkpoint(self, path: str) -> None:
         """Load pretrained MiT weights with strict=False."""
         if not path or not os.path.exists(path):
-            print(f"[BreastSegFormer] Init path '{path}' not found, skipping.")
+            print(f"[MammaSegNet] Init path '{path}' not found, skipping.")
             return
         state_dict = torch.load(path, map_location="cpu")
         if isinstance(state_dict, dict) and "state_dict" in state_dict:
@@ -269,6 +269,6 @@ class BreastSegFormer(nn.Module):
                 skips += 1
         missing, unexpected = self.load_state_dict(cleaned, strict=False)
         print(
-            f"[BreastSegFormer] Loaded {len(cleaned)} keys (skipped={skips}) from '{path}' "
+            f"[MammaSegNet] Loaded {len(cleaned)} keys (skipped={skips}) from '{path}' "
             f"(missing={len(missing)}, unexpected={len(unexpected)})."
         )

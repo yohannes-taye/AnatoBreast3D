@@ -27,7 +27,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 class BreastPerceptionAdapter:
-    """Batch adapter around existing BreastSegFormer + NippleFCOSHead inference."""
+    """Batch adapter around existing MammaSegNet + NippleFCOSHead inference."""
 
     def __init__(
         self,

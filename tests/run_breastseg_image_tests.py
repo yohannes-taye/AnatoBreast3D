@@ -1,4 +1,4 @@
-"""Run BreastSegFormer inference on test images and report detection/segmentation stats."""
+"""Run MammaSegNet inference on test images and report detection/segmentation stats."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def run_inference(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Test BreastSegFormer on sample images.")
+    parser = argparse.ArgumentParser(description="Test MammaSegNet on sample images.")
     parser.add_argument("--config", default="configs/breastseg/breastseg_b2_inplace.py", help="Config file.")
     parser.add_argument(
         "--checkpoint",

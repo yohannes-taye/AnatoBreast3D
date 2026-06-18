@@ -17,7 +17,7 @@ LabelMe / processed breast images
   -> data/breastseg/processed_merged
   -> data_loaders.BreastCocoDataset
   -> tools/train_breastseg.py
-  -> nets.segmentors.BreastSegFormer
+  -> nets.segmentors.MammaSegNet
   -> work_dirs/breastseg_b2/best.pth
   -> tools/infer_demo.py or recon3d.perception.BreastPerceptionAdapter
   -> RGB breast masks + nipple boxes
@@ -41,14 +41,12 @@ Medical-breast-segmentation-and-reconstruction/
 |-- data_loaders/               # PyTorch dataset and collate layer for breast training data
 |-- docs/                       # project documentation and operating notes
 |-- logs/                       # training logs written by tools/train_breastseg.py
-|-- nets/                       # BreastSegFormer, MiT backbone, heads, necks, losses/utilities
+|-- nets/                       # MammaSegNet, MiT backbone, heads, necks, losses/utilities
 |-- recon3d/                    # Orbbec RGB-D reconstruction package
 |-- tests/                      # unit, smoke, and single-view demo assets
 |-- tools/                      # command-line data, training, validation, inference, export tools
-|-- utils/                      # legacy SegFormer helper code used by training/inference
+|-- utils/                      # legacy helper code used by training/inference
 |-- work_dirs/                  # experiment checkpoints, best model, TensorBoard event files
-|-- predict.py                  # legacy interactive image/video/FPS/ONNX entrypoint
-|-- segformer.py                # legacy SegFormer_Segmentation wrapper used by predict.py
 |-- requirements.txt            # base software dependencies
 `-- requirements-hardware.txt   # optional Orbbec hardware dependencies
 ```
@@ -59,18 +57,18 @@ Medical-breast-segmentation-and-reconstruction/
 | --- | --- | --- | --- |
 | `.claude/` | Development metadata only. | Local assistant config. | No effect on data processing, model training, or reconstruction. |
 | `.vscode/` | Developer/editor convenience. | Workspace settings. | Safe to ignore for runtime behavior. |
-| `checkpoint/` | Stores pretrained or legacy weights that are not tied to one training run. | `segformer_b0_weights_voc.pth`, `README.md`. | The current B2 training config initializes from `work_dirs/breastseg_b2/epoch_030.pth`; this folder is mainly a reusable weight cache. |
+| `checkpoint/` | Deployed/named perception weights, separate from raw training output. | `breastseg.pth`, `README.md`. | `configs/recon3d/default.yaml` loads `checkpoint/breastseg.pth`. Training still writes `work_dirs/breastseg_b2/best.pth`; copy/rename it here to deploy. Future models can use new subfolders. |
 | `configs/` | Configuration source for both pipeline halves. | `breastseg/breastseg_b2_inplace.py`, `recon3d/default.yaml`. | `breastseg` controls dataset paths, model size, loss weights, optimizer, sampling repeats, and inference thresholds. `recon3d` controls checkpoint path, device, fusion voxel size, nipple 3D thresholds, output path, and sync drift. |
 | `data/` | Local data root consumed by data preparation and loaders. | `data/breastseg/raw_combined`, `dataset3_converted`, `processed_merged`. | `processed_merged` is the default training root: `images/`, `sem_masks/`, `annotations/coco_det.json`, `splits/train.txt`, `splits/val.txt`. Raw/replay RGB-D data can also live under `data/raw/...` when recording support is wired. |
 | `data_loaders/` | Converts processed data into model-ready PyTorch batches. | `breast_coco.py`. | `BreastCocoDataset` reads images, segmentation masks, COCO nipple boxes, split files, hard-sample repeats, augmentation, letterbox resize, and returns `images`, `gt_seg`, `gt_boxes`, validity masks, and metadata. |
 | `docs/` | Human-facing project knowledge base. | `QUICKSTART.md`, `DATA_LAYOUT.md`, `PROJECT_STRUCTURE.md`. | Documents environment setup, data layout, pipeline commands, coordinate conventions, and folder responsibilities. |
 | `logs/` | Stores training logs. | `train_breastseg_b2_*.log`. | Created by `tools/train_breastseg.py`; useful for checking epoch loss, validation Dice/mIoU/AP, FPS, and checkpoint history. |
-| `nets/` | Core 2D neural network implementation. | `backbone.py`, `segmentors/`, `decode_heads/`, `dense_heads/`, `necks/`, `utils/`. | Defines the MiT backbone, SegFormer segmentation head, LightFPN, FCOS-style nipple detector, Gaussian prior builder, and multi-task `BreastSegFormer`. |
+| `nets/` | Core 2D neural network implementation. | `backbone.py`, `segmentors/`, `decode_heads/`, `dense_heads/`, `necks/`, `utils/`. | Defines the MiT backbone, MammaSeg segmentation head, LightFPN, FCOS-style nipple detector, Gaussian prior builder, and multi-task `MammaSegNet`. |
 | `recon3d/` | 3D reconstruction and localisation stack. | `pipeline.py`, `cli.py`, `config.py`, plus subpackages. | Takes synchronized aligned RGB-D frames, runs the existing 2D model, back-projects masked depth, estimates/fuses nipple observations, fuses point clouds, smooths 3D outputs, and writes reconstruction artifacts. |
 | `tests/` | Regression protection and demo assets. | `test_pipeline.py`, `test_backproject.py`, `test_fusion.py`, `test_nipple3d.py`, `test_sensors.py`, `singleview/`. | Synthetic tests cover 3D math, replay cameras, config loading, perception pipeline integration, and single-view image/video inference helpers. Hardware is not required for the current tests. |
 | `tools/` | Operational command-line scripts. | `train_breastseg.py`, `infer_demo.py`, `validate.py`, `convert_breast_labelme.py`, `prepare_data.py`, `regenerate_splits.py`, `export_onnx.py`, `model_summary.py`. | This is the user-facing control layer for preparing data, training, validating, visualising predictions, exporting models, and inspecting model size. |
-| `utils/` | Legacy SegFormer helper utilities. | `utils.py`, `dataloader.py`, `utils_fit.py`, `utils_metrics.py`, `callbacks.py`. | Current multi-task training still uses helpers such as `seed_everything`, `cvtColor`, `resize_image`, and `preprocess_input`. Some files support the older single-task SegFormer flow. |
-| `work_dirs/` | Experiment output root. | `breastseg_b2/best.pth`, `epoch_*.pth`, `tensorboard/`. | Training checkpoints and TensorBoard event files live here. `recon3d/default.yaml` points at `work_dirs/breastseg_b2/best.pth` for perception. |
+| `utils/` | Legacy helper utilities. | `utils.py`, `dataloader.py`, `utils_metrics.py`, `callbacks.py`. | Current multi-task training still uses helpers such as `seed_everything`, `cvtColor`, `resize_image`, and `preprocess_input`. |
+| `work_dirs/` | Experiment output root. | `breastseg_b2/best.pth`, `epoch_*.pth`, `tensorboard/`. | Training checkpoints and TensorBoard event files live here. Perception loads the deployed copy at `checkpoint/breastseg.pth`. |
 
 ## `configs/`
 
@@ -129,12 +127,11 @@ frequency for these examples.
 ```text
 nets/
 |-- backbone.py
-|-- segformer.py
-|-- segformer_training.py
+|-- mammaseg.py
 |-- segmentors/
 |   `-- breastseg_multitask.py
 |-- decode_heads/
-|   `-- segformer_head_with_prior.py
+|   `-- mammaseg_prior_head.py
 |-- dense_heads/
 |   `-- nipple_fcos_head.py
 |-- necks/
@@ -149,7 +146,7 @@ combines:
 - MiT backbone from `backbone.py`.
 - `LightFPN` for multi-scale detector features.
 - `NippleFCOSHead` for single-class nipple box detection.
-- `SegFormerHeadWithPrior` for segmentation, optionally conditioned by Gaussian
+- `MammaSegPriorHead` for segmentation, optionally conditioned by Gaussian
   priors rendered from GT or predicted nipple boxes.
 - Segmentation CE/Dice/boundary losses plus detection FCOS losses.
 
@@ -164,7 +161,6 @@ recon3d/
 |-- config.py
 |-- cli.py
 |-- pipeline.py
-|-- viz.py
 |-- calibration/
 |   |-- charuco.py
 |   `-- io.py
@@ -212,7 +208,7 @@ Subpackages:
 | --- | --- |
 | `calibration/` | Charuco detection, solvePnP pose estimation, reprojection error summaries, and JSON IO for intrinsics/extrinsics/depth configs. It uses the convention `p_world = T_world_cam @ p_cam_h`. |
 | `geometry/` | Metric geometry operations: valid depth masking, depth back-projection to camera-frame point clouds, camera-to-world transform, point cloud merge/downsample/outlier removal, 3D nipple candidate extraction, covariance estimation, side assignment, outlier rejection, and final left/right fusion. |
-| `perception/` | Adapter between `recon3d` and the existing 2D model. It letterboxes RGB frames with `tools.infer_demo` preprocessing, runs `BreastSegFormer`, and remaps masks/boxes back to original aligned RGB/depth pixels. |
+| `perception/` | Adapter between `recon3d` and the existing 2D model. It letterboxes RGB frames with `tools.infer_demo` preprocessing, runs `MammaSegNet`, and remaps masks/boxes back to original aligned RGB/depth pixels. |
 | `sensors/` | Camera abstraction layer. `ReplayRGBDCamera` and `MockRGBDCamera` are functional now; `FemtoBoltCamera` guards the unfinished `pyorbbecsdk` hardware integration. `MultiFemtoBoltRig` synchronizes camera reads by timestamp drift. |
 | `smoothing/` | Low-latency temporal filters for 3D nipple coordinates, currently One Euro filtering in the main pipeline and an optional constant-velocity Kalman filter. |
 
@@ -246,7 +242,7 @@ convert_breast_labelme.py / prepare_data.py
 ```
 
 `train_breastseg.py` is the main training entry. It loads config, builds
-`BreastCocoDataset`, builds `BreastSegFormer`, trains with AdamW/cosine LR/AMP,
+`BreastCocoDataset`, builds `MammaSegNet`, trains with AdamW/cosine LR/AMP,
 evaluates Dice, mIoU, AP, AP-small, writes logs to `logs/`, checkpoints to
 `work_dirs/`, and TensorBoard events to `work_dirs/<experiment>/tensorboard`.
 
@@ -307,7 +303,7 @@ rejected cameras. `run_summary.json` stores timing and measurable run metrics.
 python tools/convert_breast_labelme.py --json-dir ./data/breastseg/raw_combined/labelme --image-dir ./data/breastseg/raw_combined/images --out ./data/breastseg/processed_merged
 python tools/regenerate_splits.py --images-dir ./data/breastseg/processed_merged/images --splits-dir ./data/breastseg/processed_merged/splits
 python tools/train_breastseg.py --config configs/breastseg/breastseg_b2_inplace.py
-python tools/infer_demo.py --config configs/breastseg/breastseg_b2_inplace.py --checkpoint work_dirs/breastseg_b2/best.pth --input tests/singleview/input_vis --save-dir tests/singleview/output_vis
+python tools/infer_demo.py --config configs/breastseg/breastseg_b2_inplace.py --checkpoint checkpoint/breastseg.pth --input tests/singleview/input_vis --save-dir tests/singleview/output_vis
 python -m recon3d.cli replay --config configs/recon3d/default.yaml --bag data/raw/session_001 --out runs/session_001_replay
 python -m pytest
 ruff check .

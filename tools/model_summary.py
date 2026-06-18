@@ -1,4 +1,4 @@
-"""Display model architecture, parameters, and FLOPs for BreastSegFormer."""
+"""Display model architecture, parameters, and FLOPs for MammaSegNet."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import torch
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from nets.segmentors.breastseg_multitask import BreastSegFormer
+from nets.segmentors.breastseg_multitask import MammaSegNet
 
 
 def count_parameters(model: torch.nn.Module) -> tuple[int, int]:
@@ -38,7 +38,7 @@ def print_model_info(model: torch.nn.Module, phi: str, input_size: tuple[int, in
     total_params, trainable_params = count_parameters(model)
     
     print("=" * 80)
-    print(f"BreastSegFormer Model Summary (Backbone: MiT-{phi.upper()})")
+    print(f"MammaSegNet Model Summary (Backbone: MiT-{phi.upper()})")
     print("=" * 80)
     print(f"\n📊 Model Statistics:")
     print(f"  • Total Parameters:     {format_number(total_params):>10} ({total_params:,})")
@@ -47,8 +47,8 @@ def print_model_info(model: torch.nn.Module, phi: str, input_size: tuple[int, in
     print(f"  • Number of Classes:    2 (background, breast)")
     
     print(f"\n🏗️ Model Architecture:")
-    print(f"  • Backbone:             SegFormer MiT-{phi.upper()}")
-    print(f"  • Segmentation Head:    SegFormer Decode Head")
+    print(f"  • Backbone:             MammaSeg MiT-{phi.upper()}")
+    print(f"  • Segmentation Head:    MammaSeg Decode Head")
     print(f"  • Detection Head:       FCOS (Anchor-free)")
     print(f"  • Feature Pyramid:      FPN")
     
@@ -94,13 +94,13 @@ def estimate_flops(model: torch.nn.Module, input_size: tuple[int, int], device: 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Display BreastSegFormer model summary.")
+    parser = argparse.ArgumentParser(description="Display MammaSegNet model summary.")
     parser.add_argument(
         "--phi",
         type=str,
         default="b2",
         choices=["b0", "b1", "b2", "b3", "b4", "b5"],
-        help="SegFormer backbone variant (default: b2)",
+        help="MammaSeg backbone variant (default: b2)",
     )
     parser.add_argument(
         "--input-size",
@@ -120,7 +120,7 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Build model
-    model = BreastSegFormer(
+    model = MammaSegNet(
         num_classes=2,
         phi=args.phi,
         init_from=None,

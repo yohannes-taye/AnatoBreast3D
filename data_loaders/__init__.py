@@ -1,1 +1,1 @@
-"BreastSegFormer data loading package."
+"MammaSegNet data loading package."

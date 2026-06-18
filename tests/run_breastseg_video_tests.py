@@ -1,4 +1,4 @@
-"""Run BreastSegFormer inference on a video and overlay breast/nipple tracking."""
+"""Run MammaSegNet inference on a video and overlay breast/nipple tracking."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default="configs/breastseg/breastseg_b2_inplace.py", help="Config file.")
     parser.add_argument(
         "--checkpoint",
-        default="work_dirs/breastseg_b2/best.pth",
+        default="checkpoint/breastseg.pth",
         help="Checkpoint path with trained weights.",
     )
     parser.add_argument("--video", default="tests/three_images_video.mp4", help="Input video path.")

@@ -1,4 +1,4 @@
-"""Validation script for BreastSegFormer checkpoints."""
+"""Validation script for MammaSegNet checkpoints."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ def build_val_loader(cfg, data_root):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Validate BreastSegFormer checkpoint.")
+    parser = argparse.ArgumentParser(description="Validate MammaSegNet checkpoint.")
     parser.add_argument("--config", required=True, help="Path to config file.")
     parser.add_argument("--checkpoint", required=True, help="Checkpoint to evaluate.")
     parser.add_argument("--data-root", required=False, help="Dataset root override.")

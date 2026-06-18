@@ -1,4 +1,4 @@
-"""SegFormer decode head variant that concatenates Gaussian priors."""
+"""MammaSeg decode head variant that concatenates Gaussian priors."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ import torch
 from torch import Tensor, nn
 import torch.nn.functional as F
 
-from nets.segformer import ConvModule, MLP
+from nets.mammaseg import ConvModule, MLP
 
 
-class SegFormerHeadWithPrior(nn.Module):
-    """SegFormer decode head that optionally consumes a 2-channel prior."""
+class MammaSegPriorHead(nn.Module):
+    """MammaSeg decode head that optionally consumes a 2-channel prior."""
 
     def __init__(
         self,

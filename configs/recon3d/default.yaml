@@ -30,7 +30,7 @@ hardware:
 
 perception:
   model_config_path: configs/breastseg/breastseg_b2_inplace.py
-  checkpoint_path: work_dirs/breastseg_b2/best.pth
+  checkpoint_path: checkpoint/breastseg.pth
   device: cuda
   score_thr: 0.3
   topk: 2

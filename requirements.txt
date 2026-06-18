@@ -1,7 +1,7 @@
 #
 # Base runtime for Medical-breast-segmentation-and-reconstruction:
 #
-#   conda activate segformer
+#   conda activate breastseg
 #   pip install -r requirements.txt
 #
 # This file intentionally does not include pyorbbecsdk because hardware SDK

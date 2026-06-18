@@ -48,7 +48,7 @@ def launch_finetune(project_root: Path, payload: dict[str, Any] | None = None) -
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / "finetune.log"
     work_dir = project_root / "active_learning" / "checkpoints" / run_id
-    init_from = str(payload.get("init_from") or "work_dirs/breastseg_b2/best.pth")
+    init_from = str(payload.get("init_from") or "checkpoint/breastseg.pth")
 
     command = [
         sys.executable,
