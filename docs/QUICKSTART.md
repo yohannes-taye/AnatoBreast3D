@@ -111,8 +111,8 @@ python -m recon3d.cli run \
 ```
 
 With the default config, the pipeline starts the embedded browser viewer at
-`http://127.0.0.1:8765/viewer/`. Use `--open-viewer` to open it automatically,
-or `--no-visualize` for a headless run.
+`http://127.0.0.1:8765/viewer/live.html`. Use `--open-viewer` to open it
+automatically, or `--no-visualize` for a headless run.
 
 Expected hardware mode:
 

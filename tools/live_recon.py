@@ -138,6 +138,7 @@ def main() -> None:
     REC = None
     RECS: list = []  # rerun recordings to tee each log to (default sink = live; +file when --record)
     rerun_url = None
+    rerun_error = None
     if not args.no_rerun:
         try:
             import rerun as rr
@@ -169,7 +170,8 @@ def main() -> None:
                 RECS.append(REC)
                 print(f"recording session to {rec_path}", flush=True)
         except Exception as exc:  # noqa: BLE001 - viewer is optional; keep capturing without it
-            print(f"rerun disabled ({exc})", flush=True)
+            rerun_error = f"{type(exc).__name__}: {exc}"
+            print(f"rerun disabled ({rerun_error})", flush=True)
             RR = None
             RECS = []
 
@@ -320,6 +322,8 @@ def main() -> None:
                     "total": round(dt * 1000, 1),
                 },
             }
+            if rerun_error:
+                manifest["rerun_error"] = rerun_error
             (out / "live_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             (out / "nipple_world.json").write_text("{}", encoding="utf-8")
             frame_i += 1

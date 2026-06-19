@@ -61,7 +61,7 @@ def test_pipeline_starts_viewer_when_enabled(tmp_path, monkeypatch) -> None:
 
     def fake_start_viewer_server(**kwargs):
         calls.append(kwargs)
-        return "http://127.0.0.1:8765/viewer/"
+        return "http://127.0.0.1:8765/viewer/live.html"
 
     monkeypatch.setattr("recon3d.pipeline.start_viewer_server", fake_start_viewer_server)
     config = Recon3DConfig(
@@ -74,7 +74,7 @@ def test_pipeline_starts_viewer_when_enabled(tmp_path, monkeypatch) -> None:
 
     pipeline = Recon3DPipeline(config, {}, perception=_MaskOnlyPerception())
 
-    assert pipeline.viewer_url == "http://127.0.0.1:8765/viewer/"
+    assert pipeline.viewer_url == "http://127.0.0.1:8765/viewer/live.html"
     assert calls == [
         {
             "host": "127.0.0.1",

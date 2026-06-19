@@ -173,22 +173,33 @@ python -m recon3d.cli run --config configs\recon3d\default.yaml --out runs\recon
 The embedded viewer is served at:
 
 ```text
-http://127.0.0.1:8765/viewer/
+http://127.0.0.1:8765/viewer/live.html
 ```
 
 Use `--open-viewer` to open the browser automatically, `--viewer-port` to choose
 a different port, or `--no-visualize` to keep the pipeline headless.
 
-The Rerun-backed `tools\live_recon.py` path still uses two long-running
-processes. Start them in two separate PowerShell or conda terminals when you
-need the live iframe and Active Learning API.
+For the Rerun-backed live iframe and Active Learning API, start both required
+long-running processes with one command:
+
+```powershell
+cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
+powershell -ExecutionPolicy Bypass -File tools\start_recon3d_live.ps1 -OpenBrowser
+```
+
+The script opens one PowerShell window for the browser viewer/API server and one
+for realtime capture, segmentation, fusion, and Rerun streaming. Logs are written
+under `runs\recon3d_live\logs\`.
+
+For manual debugging, start the same two processes in separate PowerShell or
+conda terminals.
 
 Terminal 1: browser viewer and active-learning API server.
 
 ```powershell
 cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
 conda activate breastseg
-python tools\serve_recon3d_viewer.py --host 127.0.0.1 --port 8765
+python tools\serve_recon3d_viewer.py --host 127.0.0.1 --port 8765 --open
 ```
 
 Terminal 2: realtime camera capture, segmentation, fusion, and live manifest
@@ -197,7 +208,7 @@ writer.
 ```powershell
 cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
 conda activate breastseg
-python tools\live_recon.py --out runs\recon3d_live --config runs\_tmp_live.yaml --color-size 1280 720 --reuse-existing-sync-config
+python tools\live_recon.py --out runs\recon3d_live --config runs\_tmp_live.yaml --color-size 1280 720 --reuse-existing-sync-config --rerun-web-port 9090 --rerun-grpc-port 9876
 ```
 
 Open the live dashboard:
@@ -210,6 +221,16 @@ The viewer server is responsible for the web page and Active Learning API. The
 camera pipeline is responsible for Orbbec capture and reconstruction. If the UI
 shows `server offline`, restart `tools\serve_recon3d_viewer.py`; that message
 does not necessarily mean the cameras stopped.
+
+Manual live-view checks:
+
+- Fresh `live_manifest.json` with `rerun_url`: the Rerun iframe stays visible.
+- Stale `live_manifest.json` with `rerun_url`: the iframe stays visible and the
+  header shows a stale frame status.
+- Manifest missing `rerun_url`: the page shows `Old live manifest` once without
+  flickering, including the base path it is reading.
+- Manifest with `rerun_error`: the page shows the Rerun error and points to
+  `runs\recon3d_live\logs\`.
 
 ## Calibration
 

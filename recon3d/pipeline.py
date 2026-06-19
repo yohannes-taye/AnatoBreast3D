@@ -121,7 +121,7 @@ def start_viewer_server(
         _VIEWER_THREAD = thread
         _VIEWER_ROOT = ROOT
         browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
-        _VIEWER_BASE_URL = f"http://{browser_host}:{chosen_port}/viewer/"
+        _VIEWER_BASE_URL = f"http://{browser_host}:{chosen_port}/viewer/live.html"
         if not _VIEWER_ATEXIT_REGISTERED:
             atexit.register(stop_viewer_server)
             _VIEWER_ATEXIT_REGISTERED = True

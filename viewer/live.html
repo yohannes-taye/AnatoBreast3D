@@ -20,10 +20,6 @@
   .main { display:grid; grid-template-columns:minmax(0,1fr) 430px; min-height:0; }
   .stage { position:relative; min-height:0; background:radial-gradient(circle at 50% 40%,#1a2026,#0c0f13); }
   .stage iframe { width:100%; height:100%; border:0; display:block; }
-  .stage .placeholder { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
-    flex-direction:column; gap:8px; color:var(--muted); font-size:13px; text-align:center; padding:24px; }
-  .stage .placeholder b { color:var(--ink); font-size:14px; }
-  .stage .placeholder code { color:var(--teal); font-size:12px; }
   .side { border-left:1px solid var(--line); overflow:auto; padding:10px; display:grid; gap:8px; align-content:start; }
   .sec-title { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; margin-top:4px; }
   .pill { padding:3px 8px; border:1px solid var(--line); border-radius:999px; font-size:12px; color:var(--muted); }
@@ -41,11 +37,6 @@
   <div class="main">
     <div class="stage">
       <iframe id="rrFrame" title="rerun viewer" allow="cross-origin-isolated" hidden></iframe>
-      <div class="placeholder" id="rrPlaceholder">
-        <b>Waiting for the rerun stream…</b>
-        <span>Start the capture loop:</span>
-        <code>python tools/live_recon.py</code>
-      </div>
     </div>
     <aside class="side">
       <div class="sec-title">Active Learning</div>
@@ -55,14 +46,22 @@
 </div>
 <script>
 "use strict";
-const BASE = "../runs/recon3d_live/";
+function queryOutputBase() {
+  const value = new URLSearchParams(window.location.search).get("base");
+  if (!value || /^https?:\/\//i.test(value) || value.startsWith("//")) {
+    return null;
+  }
+  return `${value.replace(/\\/g, "/").replace(/\/+$/, "")}/`;
+}
+
+const BASE = queryOutputBase() || "../runs/recon3d_live/";
 const CAMS = ["cam0","cam1","cam2"];
+const STALE_MANIFEST_MS = 30000;
 
 const dom = {
   stat: document.getElementById("stat"),
   dot: document.getElementById("liveDot"),
   frame: document.getElementById("rrFrame"),
-  placeholder: document.getElementById("rrPlaceholder"),
 };
 
 // active_learning.js reads this on load (cams/base) and the manifest live each frame.
@@ -70,13 +69,64 @@ window.liveReconState = { base: BASE, cams: CAMS, manifest: null };
 
 let lastTs = 0;
 let rerunMounted = false;
+let currentRerunUrl = "";
+
+function setStatus(text, isLive) {
+  if (dom.stat.textContent !== text) {
+    dom.stat.textContent = text;
+  }
+  dom.dot.classList.toggle("live", isLive);
+}
 
 function mountRerun(url) {
-  if (rerunMounted || !url) return;
-  dom.frame.src = url;
+  const nextUrl = String(url || "").trim();
+  if (!nextUrl) return false;
+  if (currentRerunUrl !== nextUrl) {
+    dom.frame.src = nextUrl;
+    currentRerunUrl = nextUrl;
+  }
   dom.frame.hidden = false;
-  dom.placeholder.hidden = true;
   rerunMounted = true;
+  return true;
+}
+
+function manifestAgeMs(manifest) {
+  const timestamp = Number(manifest.timestamp);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return null;
+  }
+  return Date.now() - timestamp * 1000;
+}
+
+function formatAge(ageMs) {
+  if (ageMs === null) return "unknown age";
+  const seconds = Math.max(0, Math.round(ageMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m ${remainder}s`;
+}
+
+function noStreamStatus(manifest, isStale, ageMs) {
+  const hasRerunUrl = Object.prototype.hasOwnProperty.call(manifest, "rerun_url");
+  if (!hasRerunUrl) {
+    const staleText = isStale ? ` · stale ${formatAge(ageMs)}` : "";
+    return `old manifest${staleText} · ${BASE}`;
+  }
+  if (!manifest.rerun_url && manifest.rerun_error) {
+    return `rerun error · ${manifest.rerun_error}`;
+  }
+  if (!manifest.rerun_url) {
+    return "capture running with --no-rerun";
+  }
+  return "";
+}
+
+function updateFrameStat(manifest) {
+  if (manifest.timestamp === lastTs) return;
+  lastTs = manifest.timestamp;
+  const pts = Number(manifest.points || 0).toLocaleString();
+  setStatus(`${pts} pts · ${manifest.fps} fps · frame ${manifest.frame}`, true);
 }
 
 async function refresh() {
@@ -84,21 +134,25 @@ async function refresh() {
   try {
     man = await (await fetch(BASE + "live_manifest.json", { cache: "no-store" })).json();
   } catch (e) {
-    dom.stat.textContent = "waiting for live_recon.py…";
-    dom.dot.classList.remove("live");
+    setStatus(`waiting for live_recon.py · ${BASE}`, false);
     return;
   }
   window.liveReconState.manifest = man;
-  dom.dot.classList.add("live");
-  mountRerun(man.rerun_url);
-  if (!man.rerun_url && !rerunMounted) {
-    dom.placeholder.querySelector("b").textContent = "Capture running with --no-rerun (no live view)";
+  const ageMs = manifestAgeMs(man);
+  const isStale = ageMs !== null && ageMs > STALE_MANIFEST_MS;
+  if (mountRerun(man.rerun_url)) {
+    if (isStale) {
+      setStatus(`stale · ${formatAge(ageMs)} · frame ${man.frame ?? "-"}`, false);
+    } else {
+      updateFrameStat(man);
+    }
+    return;
   }
-  if (man.timestamp !== lastTs) {
-    lastTs = man.timestamp;
-    const pts = Number(man.points || 0).toLocaleString();
-    dom.stat.textContent = `${pts} pts · ${man.fps} fps · frame ${man.frame}`;
+  if (rerunMounted) {
+    setStatus(`stream retained · ${BASE}`, false);
+    return;
   }
+  setStatus(noStreamStatus(man, isStale, ageMs) || "no rerun stream", false);
 }
 
 refresh();

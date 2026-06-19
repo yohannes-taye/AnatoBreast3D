@@ -9,6 +9,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
+from urllib.parse import urlsplit
 import webbrowser
 
 
@@ -123,7 +124,20 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         raw = self.rfile.read(length)
         return json.loads(raw.decode("utf-8")) if raw else {}
 
+    def _redirect_to_live_viewer(self, query: str) -> None:
+        location = "/viewer/live.html"
+        if query:
+            location = f"{location}?{query}"
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802 - http.server naming
+        parsed = urlsplit(self.path)
+        if parsed.path in {"/viewer", "/viewer/"}:
+            self._redirect_to_live_viewer(parsed.query)
+            return
         if self.path == "/api/active-learning/summary":
             self._send_json(dataset_summary(self._project_root()))
             return
@@ -176,7 +190,7 @@ def main() -> None:
     if server is None:
         raise SystemExit(f"No free port found from {args.port} to {args.port + 19}")
 
-    url = f"http://{args.host}:{chosen_port}/viewer/"
+    url = f"http://{args.host}:{chosen_port}/viewer/live.html"
     print(f"Serving Recon3D viewer at {url}")
     print("Press Ctrl+C to stop.")
     if args.open:
