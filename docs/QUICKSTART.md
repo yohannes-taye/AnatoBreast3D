@@ -73,39 +73,44 @@ binding on the target machine.
 ## 4. Record
 
 ```bash
-python -m recon3d.cli record --duration 30 --out data/raw/session_001
+python -m recon3d.cli record --config configs/recon3d/default.yaml --out data/Replay/orbbec_bag_test --duration-s 30 --color-size 1280 720 --color-fps 30
 ```
 
-The target recording layout is one folder per camera with:
+The target recording layout is one SDK bag session:
 
 ```text
-metadata.json
-rgb/*.png
-depth/*.png
+session.json
+cam0.bag
+cam1.bag
+cam2.bag
 ```
 
-Depth is aligned to RGB and stored in millimetres.
+Recording waits for a synchronized T0 before bag writing starts.
 
 ## 5. Replay
 
-```bash
-python -m recon3d.cli replay \
-  --config configs/recon3d/default.yaml \
-  --bag data/raw/session_001 \
-  --out runs/session_001_replay
+```powershell
+python -m recon3d.cli replay --config configs\recon3d\default.yaml --bag-session data\Replay\orbbec_bag_720p_100s --out runs\orbbec_bag_720p_100s_replay --visualize --probe-frames 180 --wait-timeout-ms 5000
 ```
 
 Replay runs the same reconstruction pipeline without physical cameras. This is
 the preferred first test path for debugging model, geometry, and IO behavior.
+The browser viewer also has a Replay panel that lists SDK bag sessions from
+`data\Replay\*\session.json` and starts the same CLI replay command for the
+selected session.
 
 ## 6. Real-Time Run
 
-Use the root startup script for the normal live workflow. It starts the viewer
-server and the live reconstruction pipeline in separate PowerShell windows, and
-`viewer/live.html` embeds the Rerun stream as the only visualization page.
+Use two terminals for the normal live workflow. The viewer/API server serves
+`viewer/live.html`; the formal CLI run publishes `live_manifest.json`, preview
+images, and the embedded Rerun stream.
 
 ```powershell
-.\start_recon3d_live.ps1 -OpenBrowser
+python tools\serve_recon3d_viewer.py --host 127.0.0.1 --port 8765 --open
+```
+
+```powershell
+python -m recon3d.cli run --config configs\recon3d\default.yaml --out runs\live --visualize
 ```
 
 For formal headless reconstruction, run the pipeline directly:

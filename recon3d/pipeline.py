@@ -18,13 +18,14 @@ from recon3d.config import (
     ReconstructionResult,
     RGBDFrame,
 )
-from recon3d.geometry.backproject import backproject_masked_depth
+from recon3d.geometry.cloud_cleanup import backproject_cleaned_breast_cloud
 from recon3d.geometry.fusion import FusionBackend, PointCloudFusionBackend, point_cloud_bounds
 from recon3d.geometry.nipple3d import (
     estimate_nipple_observations,
     fuse_nipple_observations,
     nipple_json_payload,
 )
+from recon3d.geometry.surface import optional_poisson_surface_points
 from recon3d.perception.inference import BreastPerceptionAdapter
 from recon3d.sensors.rig import MultiFemtoBoltRig
 from recon3d.smoothing.temporal import OneEuroFilter3D
@@ -100,6 +101,10 @@ class Recon3DPipeline:
         """
         self.config = config
         self.extrinsics = dict(extrinsics)
+        self._camera_centers_world_m = [
+            extrinsic.T_world_cam[:3, 3]
+            for extrinsic in self.extrinsics.values()
+        ]
         self.rig = rig
         self.perception = perception or BreastPerceptionAdapter(config=config)
         self.fusion_backend = fusion_backend or PointCloudFusionBackend(config.fusion)
@@ -231,14 +236,15 @@ class Recon3DPipeline:
         rr.set_time("time", timestamp=frame_wall_s)
         for cam_id, frame in sorted(frames.items()):
             perception = perceptions.get(cam_id)
+            depth_units_per_meter = 1.0 / frame.depth_config.depth_scale_m
             rr.log(f"cams/{cam_id}/image", rr.Image(frame.rgb))
             rr.log(
                 f"depth/{cam_id}",
                 rr.DepthImage(
                     frame.depth_mm,
-                    meter=frame.depth_config.depth_scale_m,
+                    meter=depth_units_per_meter,
                     colormap="turbo",
-                    depth_range=[frame.depth_config.min_depth_m, frame.depth_config.max_depth_m],
+                    depth_range=[self.config.cloud_cleanup.min_depth_m, self.config.cloud_cleanup.max_depth_m],
                 ),
             )
             if perception is None:
@@ -290,7 +296,11 @@ class Recon3DPipeline:
         perception_payload: dict[str, dict[str, object]] = {}
         rgb_paths: dict[str, str] = {}
         mask_paths: dict[str, str] = {}
+        depth_paths: dict[str, str] = {}
         target_width = max(1, int(self.viewer_rgb_width))
+        depth_min_m = float(self.config.cloud_cleanup.min_depth_m)
+        depth_max_m = float(self.config.cloud_cleanup.max_depth_m)
+        depth_span_m = max(depth_max_m - depth_min_m, 1e-6)
         for cam_id, frame in sorted(frames.items()):
             scale = target_width / float(frame.rgb.shape[1])
             target_height = max(1, int(round(frame.rgb.shape[0] * scale)))
@@ -307,6 +317,19 @@ class Recon3DPipeline:
                 "source_width": int(frame.rgb.shape[1]),
                 "source_height": int(frame.rgb.shape[0]),
             }
+            depth_m = frame.depth_mm.astype(np.float32) * float(frame.depth_config.depth_scale_m)
+            depth_valid = np.isfinite(depth_m) & (depth_m > 0)
+            depth_norm = np.clip((depth_m - depth_min_m) / depth_span_m, 0.0, 1.0)
+            depth_u8 = ((1.0 - depth_norm) * 255.0).astype(np.uint8)
+            depth_u8[~depth_valid] = 0
+            depth_color = cv2.applyColorMap(depth_u8, cv2.COLORMAP_TURBO)
+            depth_color[~depth_valid] = 0
+            cv2.imwrite(
+                str(live_dir / f"{cam_id}_depth.jpg"),
+                cv2.resize(depth_color, (target_width, target_height), interpolation=cv2.INTER_NEAREST),
+                [cv2.IMWRITE_JPEG_QUALITY, 86],
+            )
+            depth_paths[cam_id] = f"live/{cam_id}_depth.jpg"
             perception = perceptions.get(cam_id)
             if perception is None:
                 continue
@@ -339,6 +362,7 @@ class Recon3DPipeline:
             "rerun_url": self._rerun_url,
             "rgb": rgb_paths,
             "mask": mask_paths,
+            "depth": depth_paths,
             "display": display,
             "perception": perception_payload,
             "timings_ms": result.timings_ms,
@@ -368,13 +392,10 @@ class Recon3DPipeline:
 
         start = time.perf_counter()
         clouds = {
-            cam_id: backproject_masked_depth(
-                frame.depth_mm,
+            cam_id: backproject_cleaned_breast_cloud(
+                frame,
                 perceptions[cam_id].breast_mask,
-                frame.rgb,
-                frame.intrinsics,
-                frame.depth_config,
-                estimate_normals=False,
+                self.config.cloud_cleanup,
             )
             for cam_id, frame in frames.items()
             if cam_id in perceptions
@@ -389,6 +410,14 @@ class Recon3DPipeline:
         start = time.perf_counter()
         fused_cloud = self.fusion_backend.fuse(clouds, self.extrinsics)
         timings["fusion_ms"] = _now_ms(start)
+
+        start = time.perf_counter()
+        fused_cloud = optional_poisson_surface_points(
+            fused_cloud,
+            self._camera_centers_world_m,
+            self.config.surface,
+        )
+        timings["surface_ms"] = _now_ms(start)
 
         start = time.perf_counter()
         nipples = self._smooth_nipples(nipples, timestamp_ns)

@@ -3,26 +3,28 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Recon3D Live</title>
+<title>Recon3D Viewer</title>
 <link rel="stylesheet" href="active_learning.css" />
 <style>
   :root {
     color-scheme: dark;
-    --bg: #080a0d;
-    --panel: #10151b;
-    --panel-2: #151b22;
-    --panel-3: #1a2028;
-    --line: #27313b;
-    --line-strong: #3c4855;
-    --ink: #edf3f7;
-    --muted: #96a2ad;
-    --soft: #c9d3dc;
-    --mint: #20d0b5;
-    --mint-soft: #133834;
-    --amber: #f1bd4b;
-    --coral: #ff6b72;
-    --violet: #a99cff;
-    --blue: #71b7ff;
+    --bg: #07090c;
+    --shell: #0d1117;
+    --panel: #111821;
+    --panel-soft: #151d27;
+    --panel-strong: #1a2430;
+    --line: #273241;
+    --line-soft: #1f2834;
+    --ink: #eef5f8;
+    --soft: #c8d3dc;
+    --muted: #91a0ae;
+    --faint: #63717f;
+    --mint: #69d7c0;
+    --mint-ink: #06201b;
+    --blue: #80bfff;
+    --amber: #f0c15c;
+    --coral: #ff7885;
+    --shadow: 0 18px 52px rgba(0, 0, 0, .32);
     --timeline-crop: 66px;
   }
 
@@ -31,6 +33,7 @@
   html,
   body {
     margin: 0;
+    width: 100%;
     height: 100%;
     background: var(--bg);
     color: var(--ink);
@@ -40,27 +43,35 @@
   body { overflow: hidden; }
 
   button,
-  a {
+  select {
     font: inherit;
+  }
+
+  button:disabled,
+  select:disabled {
+    opacity: .48;
+    cursor: not-allowed;
   }
 
   .app {
     height: 100%;
+    min-width: 0;
     display: grid;
-    grid-template-rows: 68px minmax(0, 1fr);
+    grid-template-rows: 62px minmax(0, 1fr);
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, .035), transparent 180px),
+      linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0) 220px),
       var(--bg);
   }
 
   .topbar {
+    min-width: 0;
     display: grid;
-    grid-template-columns: minmax(260px, 1fr) auto auto;
+    grid-template-columns: minmax(220px, 1fr) auto;
     align-items: center;
     gap: 18px;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--line);
-    background: rgba(13, 17, 22, .96);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line-soft);
+    background: rgba(9, 12, 16, .96);
   }
 
   .brand {
@@ -71,30 +82,31 @@
   }
 
   .brand-mark {
-    width: 34px;
-    height: 34px;
-    border: 1px solid rgba(32, 208, 181, .55);
+    width: 36px;
+    height: 36px;
+    border: 1px solid rgba(105, 215, 192, .55);
     border-radius: 8px;
-    background:
-      linear-gradient(135deg, rgba(32, 208, 181, .26), rgba(113, 183, 255, .12)),
-      #0f171c;
+    background: #101a21;
+    color: var(--mint);
     display: grid;
     place-items: center;
-    color: var(--mint);
+    font-size: 13px;
     font-weight: 900;
     letter-spacing: 0;
   }
 
-  .brand-title {
+  .brand-copy {
     min-width: 0;
     display: grid;
-    gap: 2px;
+    gap: 3px;
   }
 
   h1 {
     margin: 0;
-    font-size: 16px;
-    line-height: 1.1;
+    color: var(--ink);
+    font-size: 17px;
+    line-height: 1;
+    font-weight: 820;
     letter-spacing: 0;
   }
 
@@ -109,101 +121,111 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .top-metrics {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(86px, auto));
-    gap: 8px;
-  }
-
-  .metric {
-    min-width: 86px;
-    height: 48px;
-    display: grid;
-    align-content: center;
-    gap: 3px;
-    padding: 0 11px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: rgba(255, 255, 255, .025);
-  }
-
-  .metric span {
-    color: var(--muted);
-    font-size: 10px;
-    line-height: 1;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-  }
-
-  .metric b {
-    color: var(--ink);
-    font-size: 16px;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 0;
-  }
-
   .top-actions {
     display: flex;
-    justify-content: end;
     align-items: center;
+    justify-content: end;
     gap: 8px;
   }
 
-  .tool-button,
-  .link-button {
+  .tool-button {
     height: 36px;
+    min-width: 78px;
     border-radius: 8px;
     border: 1px solid var(--line);
-    background: #121820;
+    background: #111822;
     color: var(--soft);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 7px;
-    padding: 0 12px;
-    text-decoration: none;
+    padding: 0 13px;
     cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
   }
 
-  .tool-button:hover,
-  .link-button:hover {
-    border-color: var(--line-strong);
+  .tool-button:hover {
+    border-color: #3b4a5d;
+    background: #172130;
     color: var(--ink);
-    background: #17202a;
+  }
+
+  .tool-button.primary {
+    border-color: rgba(105, 215, 192, .72);
+    background: var(--mint);
+    color: var(--mint-ink);
+    font-weight: 850;
+  }
+
+  .tool-button.primary:hover {
+    background: #84e5d1;
+    color: var(--mint-ink);
+  }
+
+  .tool-button.danger {
+    border-color: rgba(255, 120, 133, .55);
+    background: #26151a;
+    color: #ffb0b8;
   }
 
   .workspace {
     min-height: 0;
+    min-width: 0;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 390px;
-    background: #080a0d;
+    grid-template-columns: 300px minmax(0, 1fr) 340px;
+    gap: 12px;
+    padding: 12px;
   }
 
-  .viewer-pane {
+  .left-rail,
+  .right-rail {
+    min-height: 0;
+    min-width: 0;
+    display: grid;
+    gap: 10px;
+    align-content: start;
+    overflow: hidden;
+  }
+
+  .left-rail {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .right-rail {
+    grid-template-rows: minmax(0, 1fr) auto;
+    align-content: stretch;
+  }
+
+  .stage {
     min-width: 0;
     min-height: 0;
     display: grid;
-    grid-template-rows: 44px minmax(0, 1fr) 58px;
-    border-right: 1px solid var(--line);
+    grid-template-rows: 46px minmax(0, 1fr) 58px;
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    background: #05070a;
+    overflow: hidden;
+    box-shadow: var(--shadow);
   }
 
-  .viewer-head,
-  .viewer-foot {
+  .stage-head,
+  .stage-foot {
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 0 14px;
-    background: #0d1116;
+    padding: 0 13px;
+    background: #0c1117;
   }
 
-  .viewer-head {
-    border-bottom: 1px solid var(--line);
+  .stage-head {
     justify-content: space-between;
+    border-bottom: 1px solid var(--line-soft);
   }
 
-  .viewer-foot {
-    border-top: 1px solid var(--line);
+  .stage-foot {
+    border-top: 1px solid var(--line-soft);
     overflow: hidden;
   }
 
@@ -211,7 +233,7 @@
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 9px;
   }
 
   .live-dot {
@@ -219,13 +241,13 @@
     height: 9px;
     border-radius: 999px;
     background: var(--coral);
-    box-shadow: 0 0 0 3px rgba(255, 107, 114, .14);
+    box-shadow: 0 0 0 3px rgba(255, 120, 133, .14);
     flex: 0 0 auto;
   }
 
   .live-dot.live {
     background: var(--mint);
-    box-shadow: 0 0 0 3px rgba(32, 208, 181, .14);
+    box-shadow: 0 0 0 3px rgba(105, 215, 192, .14);
   }
 
   .status-text {
@@ -251,9 +273,9 @@
     min-height: 0;
     overflow: hidden;
     background:
-      linear-gradient(90deg, rgba(255, 255, 255, .035) 1px, transparent 1px),
-      linear-gradient(0deg, rgba(255, 255, 255, .03) 1px, transparent 1px),
-      #050607;
+      linear-gradient(90deg, rgba(255, 255, 255, .03) 1px, transparent 1px),
+      linear-gradient(0deg, rgba(255, 255, 255, .025) 1px, transparent 1px),
+      #05070a;
     background-size: 48px 48px;
   }
 
@@ -262,7 +284,7 @@
     height: 100%;
     border: 0;
     display: block;
-    background: #050607;
+    background: #05070a;
   }
 
   .rerun-viewport.timeline-hidden iframe {
@@ -280,9 +302,7 @@
     pointer-events: none;
   }
 
-  .empty-state[hidden] {
-    display: none;
-  }
+  .empty-state[hidden] { display: none; }
 
   .empty-copy {
     display: grid;
@@ -297,29 +317,214 @@
   }
 
   .empty-copy span {
-    max-width: 480px;
+    max-width: 520px;
     font-size: 13px;
     line-height: 1.5;
   }
 
+  .panel {
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(17, 24, 33, .98);
+    overflow: hidden;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+  }
+
+  .panel-head {
+    min-height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 13px;
+    border-bottom: 1px solid var(--line);
+    background: #101720;
+  }
+
+  .panel-head b {
+    color: var(--ink);
+    font-size: 15px;
+    font-weight: 820;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+
+  .panel-head span {
+    min-width: 0;
+    color: var(--muted);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .camera-panel {
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .camera-panel .panel-head {
+    min-height: 32px;
+    padding: 0 10px;
+  }
+
+  .camera-panel .panel-head b {
+    font-size: 13px;
+  }
+
+  .camera-panel .panel-head span {
+    font-size: 11px;
+  }
+
+  .metric-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--line);
+  }
+
+  .side-metric {
+    min-width: 0;
+    min-height: 76px;
+    display: grid;
+    align-content: center;
+    gap: 7px;
+    padding: 12px;
+    background: #101821;
+  }
+
+  .side-metric span {
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 1;
+    letter-spacing: 0;
+  }
+
+  .side-metric b {
+    min-width: 0;
+    color: var(--ink);
+    font-size: 21px;
+    line-height: 1;
+    font-weight: 850;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+  }
+
+  .replay-controls {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    background: #101821;
+  }
+
+  .replay-field {
+    min-width: 0;
+    display: grid;
+    gap: 6px;
+  }
+
+  .replay-field label {
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1;
+  }
+
+  .replay-select {
+    min-width: 0;
+    width: 100%;
+    height: 40px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #090e14;
+    color: var(--ink);
+    padding: 0 10px;
+    font-size: 13px;
+    outline: none;
+  }
+
+  .replay-select option {
+    background: #0b1118;
+    color: var(--ink);
+  }
+
+  .replay-select:focus {
+    border-color: rgba(105, 215, 192, .72);
+  }
+
+  .replay-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .replay-actions .tool-button {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .replay-meta {
+    min-height: 18px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.35;
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .run-summary {
+    padding: 12px;
+    display: grid;
+    gap: 8px;
+    background: #101821;
+  }
+
+  .summary-line {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 86px minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.25;
+  }
+
+  .summary-line b {
+    min-width: 0;
+    color: var(--soft);
+    font-size: 12px;
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
   .camera-strip {
+    width: 100%;
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 8px;
-    width: 100%;
   }
 
   .camera-chip {
     min-width: 0;
-    height: 38px;
+    height: 36px;
     display: grid;
     grid-template-columns: auto 1fr auto;
     align-items: center;
     gap: 8px;
     padding: 0 10px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--line-soft);
     border-radius: 8px;
-    background: #111720;
+    background: #101821;
   }
 
   .camera-chip::before {
@@ -340,8 +545,8 @@
   }
 
   .camera-chip b {
-    font-size: 12px;
     color: var(--ink);
+    font-size: 12px;
   }
 
   .camera-chip span {
@@ -350,98 +555,93 @@
     text-align: right;
   }
 
-  .inspector {
-    min-width: 0;
-    min-height: 0;
-    overflow: auto;
-    background: #0b0e12;
-    padding: 12px;
-    display: grid;
-    gap: 10px;
-    align-content: start;
-  }
-
-  .panel {
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--panel);
-    overflow: hidden;
-  }
-
-  .panel-head {
-    min-height: 38px;
-    padding: 10px 11px;
-    border-bottom: 1px solid var(--line);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .panel-head b {
-    font-size: 12px;
-    letter-spacing: .02em;
-  }
-
-  .panel-head span {
-    color: var(--muted);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .metric-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1px;
-    background: var(--line);
-  }
-
-  .side-metric {
-    min-width: 0;
-    background: #10151b;
-    padding: 11px;
-    display: grid;
-    gap: 5px;
-  }
-
-  .side-metric span {
-    color: var(--muted);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-  }
-
-  .side-metric b {
-    color: var(--ink);
-    font-size: 15px;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .camera-feed-list {
+    min-height: 0;
     display: grid;
-    gap: 1px;
-    background: var(--line);
+    grid-auto-rows: max-content;
+    align-content: start;
+    gap: 8px;
+    padding: 8px;
+    background: #0f161f;
+    overflow-y: auto;
   }
 
   .camera-feed {
-    background: #10151b;
+    min-width: 0;
     display: grid;
-    grid-template-columns: 112px minmax(0, 1fr);
-    gap: 10px;
-    padding: 10px;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 4px;
+    padding: 6px;
+    background: #101821;
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+  }
+
+  .feed-head {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .feed-title {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+
+  .feed-title b {
+    min-width: 0;
+    color: var(--ink);
+    font-size: 12px;
+    line-height: 1;
+    font-weight: 820;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .feed-title span {
+    color: var(--mint);
+    font-size: 9px;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .feed-meta {
+    min-width: 0;
+    color: var(--muted);
+    font-size: 9px;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .feed-media-grid {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 6px;
   }
 
   .feed-preview {
     position: relative;
-    width: 112px;
+    width: 100%;
     aspect-ratio: 16 / 9;
     overflow: hidden;
     border-radius: 6px;
-    background: #07090c;
-    border: 1px solid #1f2832;
+    background: #070b10;
+    border: 1px solid #202b38;
+  }
+
+  .feed-preview.depth {
+    background:
+      linear-gradient(135deg, rgba(128, 191, 255, .08), rgba(105, 215, 192, .04)),
+      #070b10;
   }
 
   .feed-preview img {
@@ -456,39 +656,36 @@
     inset: 0;
     mix-blend-mode: screen;
     opacity: .42;
-    filter: saturate(1.15);
+    filter: saturate(1.12);
   }
 
-  .feed-body {
-    min-width: 0;
-    display: grid;
-    align-content: center;
-    gap: 6px;
-  }
-
-  .feed-title {
-    display: flex;
+  .feed-preview-label {
+    position: absolute;
+    left: 5px;
+    top: 5px;
+    z-index: 2;
+    height: 16px;
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+    padding: 0 6px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    border-radius: 999px;
+    background: rgba(6, 10, 15, .72);
+    color: var(--soft);
+    font-size: 8px;
+    line-height: 1;
+    white-space: nowrap;
+    backdrop-filter: blur(8px);
   }
 
-  .feed-title b {
-    font-size: 13px;
-  }
-
-  .feed-title span {
-    color: var(--mint);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-  }
-
-  .feed-meta {
+  .feed-empty {
+    width: 100%;
+    height: 100%;
     display: grid;
-    gap: 4px;
+    place-items: center;
     color: var(--muted);
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
+    font-size: 9px;
+    line-height: 1;
   }
 
   .al-section {
@@ -498,58 +695,92 @@
 
   .section-label {
     color: var(--muted);
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    padding: 2px 2px 0;
+    padding: 0 2px;
+    letter-spacing: 0;
   }
 
-  @media (max-width: 1160px) {
-    .app { grid-template-rows: auto minmax(0, 1fr); }
-    .topbar {
-      grid-template-columns: 1fr;
-      align-items: stretch;
-    }
-    .top-metrics {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-    }
-    .top-actions {
-      justify-content: start;
-    }
+  @media (max-width: 1320px) {
     .workspace {
-      grid-template-columns: 1fr;
-      grid-template-rows: minmax(520px, 1fr) auto;
-      overflow: auto;
+      grid-template-columns: 280px minmax(0, 1fr);
+      grid-template-rows: minmax(540px, 1fr) auto;
     }
-    body { overflow: auto; }
-    .inspector {
-      overflow: visible;
+
+    .right-rail {
+      grid-column: 1 / -1;
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
+
     .al-section {
       grid-column: 1 / -1;
     }
   }
 
-  @media (max-width: 720px) {
-    .top-metrics {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+  @media (max-width: 760px) {
+    body { overflow: auto; }
+
+    .app {
+      height: auto;
+      min-height: 100%;
+      grid-template-rows: auto auto;
     }
-    .viewer-pane {
-      grid-template-rows: auto minmax(360px, 1fr) auto;
-    }
-    .viewer-head,
-    .viewer-foot {
+
+    .topbar {
+      grid-template-columns: 1fr;
       align-items: stretch;
-      flex-direction: column;
-      padding: 10px;
     }
+
+    .top-actions {
+      justify-content: start;
+      flex-wrap: wrap;
+    }
+
+    .workspace {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto minmax(520px, 72vh) auto;
+      overflow: visible;
+    }
+
+    .left-rail,
+    .right-rail {
+      overflow: visible;
+    }
+
+    .right-rail {
+      grid-column: auto;
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .workspace {
+      padding: 8px;
+      gap: 8px;
+    }
+
+    .metric-grid,
+    .feed-media-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .feed-preview {
+      aspect-ratio: 16 / 10;
+    }
+
     .camera-strip {
       grid-template-columns: 1fr;
     }
-    .inspector {
-      grid-template-columns: 1fr;
+
+    .stage {
+      grid-template-rows: auto minmax(420px, 1fr) auto;
+    }
+
+    .stage-head,
+    .stage-foot {
+      align-items: stretch;
+      flex-direction: column;
+      padding: 10px;
     }
   }
 </style>
@@ -559,26 +790,60 @@
   <header class="topbar">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">3D</div>
-      <div class="brand-title">
-        <h1>Recon3D Live</h1>
+      <div class="brand-copy">
+        <h1>Recon3D Viewer</h1>
         <div class="source-line" id="baseText">connecting</div>
       </div>
     </div>
-    <div class="top-metrics" aria-label="Live reconstruction metrics">
-      <div class="metric"><span>Frame</span><b id="frameMetric">--</b></div>
-      <div class="metric"><span>Points</span><b id="pointsMetric">--</b></div>
-      <div class="metric"><span>FPS</span><b id="fpsMetric">--</b></div>
-      <div class="metric"><span>Drift</span><b id="driftMetric">--</b></div>
-    </div>
     <div class="top-actions">
       <button class="tool-button" id="timelineToggle" type="button" aria-pressed="false">Timeline</button>
-      <a class="link-button" href="replay.html">Replay</a>
     </div>
   </header>
 
   <main class="workspace">
-    <section class="viewer-pane" aria-label="Rerun reconstruction viewer">
-      <div class="viewer-head">
+    <aside class="left-rail" aria-label="Run controls">
+      <section class="panel">
+        <div class="panel-head">
+          <b>Reconstruction</b>
+          <span id="ageMetric">--</span>
+        </div>
+        <div class="metric-grid">
+          <div class="side-metric"><span>Total</span><b id="totalMetric">--</b></div>
+          <div class="side-metric"><span>Perception</span><b id="perceptionMetric">--</b></div>
+          <div class="side-metric"><span>Fusion</span><b id="fusionMetric">--</b></div>
+          <div class="side-metric"><span>Nipple 3D</span><b id="nippleMetric">--</b></div>
+        </div>
+        <div class="run-summary">
+          <div class="summary-line"><span>Frame</span><b id="frameMetric">--</b></div>
+          <div class="summary-line"><span>Points</span><b id="pointsMetric">--</b></div>
+          <div class="summary-line"><span>FPS</span><b id="fpsMetric">--</b></div>
+          <div class="summary-line"><span>Drift</span><b id="driftMetric">--</b></div>
+        </div>
+      </section>
+
+      <section class="panel" id="replayPanel">
+        <div class="panel-head">
+          <b>Replay</b>
+          <span id="replayStatus">idle</span>
+        </div>
+        <div class="replay-controls">
+          <div class="replay-field">
+            <label for="replaySessionSelect">Bag session</label>
+            <select class="replay-select" id="replaySessionSelect" aria-label="Replay bag session">
+              <option value="">Loading data/Replay sessions...</option>
+            </select>
+          </div>
+          <div class="replay-actions">
+            <button class="tool-button primary" id="startReplayButton" type="button">Start</button>
+            <button class="tool-button danger" id="stopReplayButton" type="button">Stop</button>
+          </div>
+          <div class="replay-meta" id="replayMeta">--</div>
+        </div>
+      </section>
+    </aside>
+
+    <section class="stage" aria-label="Rerun reconstruction viewer">
+      <div class="stage-head">
         <div class="status-cluster">
           <span class="live-dot" id="liveDot"></span>
           <div class="status-text" id="stat">connecting</div>
@@ -594,26 +859,13 @@
           </div>
         </div>
       </div>
-      <div class="viewer-foot">
+      <div class="stage-foot">
         <div class="camera-strip" id="cameraStrip"></div>
       </div>
     </section>
 
-    <aside class="inspector" aria-label="Reconstruction details">
-      <section class="panel">
-        <div class="panel-head">
-          <b>Reconstruction</b>
-          <span id="ageMetric">--</span>
-        </div>
-        <div class="metric-grid">
-          <div class="side-metric"><span>Total</span><b id="totalMetric">--</b></div>
-          <div class="side-metric"><span>Perception</span><b id="perceptionMetric">--</b></div>
-          <div class="side-metric"><span>Fusion</span><b id="fusionMetric">--</b></div>
-          <div class="side-metric"><span>Nipple 3D</span><b id="nippleMetric">--</b></div>
-        </div>
-      </section>
-
-      <section class="panel">
+    <aside class="right-rail" aria-label="Camera and annotation details">
+      <section class="panel camera-panel">
         <div class="panel-head">
           <b>Cameras</b>
           <span id="cameraCount">3 feeds</span>
@@ -640,7 +892,7 @@ function queryOutputBase() {
   return `${value.replace(/\\/g, "/").replace(/\/+$/, "")}/`;
 }
 
-const BASE = queryOutputBase() || "../runs/recon3d_live/";
+const DEFAULT_BASE = queryOutputBase() || "../runs/recon3d_live/";
 const CAMS = ["cam0", "cam1", "cam2"];
 const STALE_MANIFEST_MS = 30000;
 
@@ -654,6 +906,12 @@ const dom = {
   viewport: document.getElementById("rerunViewport"),
   timelineToggle: document.getElementById("timelineToggle"),
   streamLabel: document.getElementById("streamLabel"),
+  replayPanel: document.getElementById("replayPanel"),
+  replayStatus: document.getElementById("replayStatus"),
+  replaySessionSelect: document.getElementById("replaySessionSelect"),
+  startReplayButton: document.getElementById("startReplayButton"),
+  stopReplayButton: document.getElementById("stopReplayButton"),
+  replayMeta: document.getElementById("replayMeta"),
   cameraStrip: document.getElementById("cameraStrip"),
   cameraFeedList: document.getElementById("cameraFeedList"),
   cameraCount: document.getElementById("cameraCount"),
@@ -668,13 +926,29 @@ const dom = {
   nippleMetric: document.getElementById("nippleMetric"),
 };
 
-window.liveReconState = { base: BASE, cams: CAMS, manifest: null };
-
+let currentBase = DEFAULT_BASE;
 let lastTs = 0;
 let rerunMounted = false;
 let currentRerunUrl = "";
+let replaySessions = [];
 
-dom.baseText.textContent = BASE;
+window.liveReconState = { base: currentBase, cams: CAMS, manifest: null };
+dom.baseText.textContent = currentBase;
+
+function setViewerBase(base) {
+  const nextBase = `${String(base || DEFAULT_BASE).replace(/\\/g, "/").replace(/\/+$/, "")}/`;
+  if (currentBase === nextBase) return;
+  currentBase = nextBase;
+  window.liveReconState.base = currentBase;
+  dom.baseText.textContent = currentBase;
+  lastTs = 0;
+  rerunMounted = false;
+  currentRerunUrl = "";
+  dom.frame.hidden = true;
+  dom.frame.removeAttribute("src");
+  dom.empty.hidden = false;
+  dom.emptyDetail.textContent = currentBase;
+}
 
 function numberText(value, digits = 0) {
   const number = Number(value);
@@ -689,6 +963,14 @@ function msText(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   return `${numberText(number, number >= 100 ? 0 : 1)} ms`;
+}
+
+function secondsText(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds)) return "--";
+  if (seconds < 90) return `${numberText(seconds, 1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${Math.round(seconds % 60)}s`;
 }
 
 function ageMs(manifest) {
@@ -729,11 +1011,117 @@ function mountRerun(url) {
 function imageUrl(path, manifest) {
   if (!path) return "";
   const stamp = Math.round(Number(manifest.timestamp || Date.now() / 1000) * 1000);
-  return `${BASE}${path}?t=${stamp}`;
+  return `${currentBase}${path}?t=${stamp}`;
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options,
+  });
+  const text = await response.text();
+  let payload;
+  try {
+    payload = text ? JSON.parse(text) : {};
+  } catch (error) {
+    throw new Error("Replay API unavailable. Restart tools/serve_recon3d_viewer.py.");
+  }
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.error || `${response.status} ${response.statusText}`);
+  }
+  return payload;
+}
+
+function setReplayUnavailable(message) {
+  replaySessions = [];
+  dom.replaySessionSelect.innerHTML = "";
+  const option = document.createElement("option");
+  option.value = "";
+  option.textContent = "Replay API unavailable";
+  dom.replaySessionSelect.append(option);
+  dom.startReplayButton.disabled = true;
+  dom.stopReplayButton.disabled = true;
+  dom.replayStatus.textContent = "offline";
+  dom.replayMeta.textContent = message;
+}
+
+function renderReplaySessions(sessions) {
+  const previous = dom.replaySessionSelect.value;
+  replaySessions = Array.isArray(sessions) ? sessions : [];
+  dom.replaySessionSelect.innerHTML = "";
+  if (replaySessions.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No data/Replay sessions found";
+    dom.replaySessionSelect.append(option);
+    dom.startReplayButton.disabled = true;
+    return;
+  }
+  for (const session of replaySessions) {
+    const option = document.createElement("option");
+    option.value = session.id;
+    option.textContent = `${session.name} | ${session.camera_count} cams | ${secondsText(session.duration_s)}`;
+    dom.replaySessionSelect.append(option);
+  }
+  if (previous && replaySessions.some((session) => session.id === previous)) {
+    dom.replaySessionSelect.value = previous;
+  }
+  dom.startReplayButton.disabled = false;
+}
+
+function selectedReplaySession() {
+  return replaySessions.find((session) => session.id === dom.replaySessionSelect.value) || null;
+}
+
+function replaySessionSummary(session) {
+  if (!session) return "Select a recorded SDK bag session from data/Replay.";
+  const state = session.completed ? "complete" : "incomplete";
+  return `${session.camera_count} cameras | ${secondsText(session.duration_s)} | ${session.bag_size || "--"} | ${state}`;
+}
+
+function updateReplayUi(status) {
+  renderReplaySessions(status.sessions || []);
+  const running = Boolean(status.running);
+  dom.stopReplayButton.disabled = !running;
+  if (running) {
+    dom.replayStatus.textContent = "running";
+    dom.replayMeta.textContent = `${status.session_name || "replay"} -> ${status.output || "--"}`;
+    if (status.base) setViewerBase(status.base);
+    return;
+  }
+  if (Number.isInteger(status.returncode)) {
+    dom.replayStatus.textContent = status.returncode === 0 ? "finished" : `failed ${status.returncode}`;
+    dom.replayMeta.textContent = status.log ? `log: ${status.log}` : "--";
+    return;
+  }
+  dom.replayStatus.textContent = "idle";
+  dom.replayMeta.textContent =
+    status.sessions && status.sessions.length ? replaySessionSummary(selectedReplaySession()) : "No data/Replay/*/session.json found.";
+}
+
+async function refreshReplayStatus() {
+  try {
+    const status = await fetchJson("/api/replay/status");
+    updateReplayUi(status);
+  } catch (error) {
+    setReplayUnavailable(error.message);
+  }
+}
+
+function cameraIds(manifest) {
+  const seen = new Set();
+  const ordered = [];
+  for (const cam of [...CAMS, ...((manifest && manifest.cameras) || [])]) {
+    if (!cam || seen.has(cam)) continue;
+    seen.add(cam);
+    ordered.push(cam);
+  }
+  return ordered;
 }
 
 function renderCameraStrip(manifest) {
-  const cameras = manifest.cameras || CAMS;
+  const cameras = cameraIds(manifest);
   dom.cameraStrip.innerHTML = "";
   for (const cam of cameras) {
     const perception = (manifest.perception && manifest.perception[cam]) || {};
@@ -746,7 +1134,7 @@ function renderCameraStrip(manifest) {
 }
 
 function renderCameraFeeds(manifest) {
-  const cameras = manifest.cameras || CAMS;
+  const cameras = cameraIds(manifest);
   dom.cameraCount.textContent = `${cameras.length} feeds`;
   dom.cameraFeedList.innerHTML = "";
   for (const cam of cameras) {
@@ -756,18 +1144,23 @@ function renderCameraFeeds(manifest) {
     const maskPixels = Number(perception.mask_pixels || 0);
     const rgb = imageUrl(manifest.rgb && manifest.rgb[cam], manifest);
     const mask = imageUrl(manifest.mask && manifest.mask[cam], manifest);
+    const depth = imageUrl(manifest.depth && manifest.depth[cam], manifest);
     const row = document.createElement("div");
     row.className = "camera-feed";
     row.innerHTML = `
-      <div class="feed-preview">
-        ${rgb ? `<img alt="${cam} rgb" src="${rgb}">` : ""}
-        ${mask ? `<img class="mask" alt="${cam} mask" src="${mask}">` : ""}
-      </div>
-      <div class="feed-body">
+      <div class="feed-head">
         <div class="feed-title"><b>${cam}</b><span>${boxes.length} nipple</span></div>
-        <div class="feed-meta">
-          <span>${numberText(maskPixels)} mask pixels</span>
-          <span>${display.source_width || "--"} x ${display.source_height || "--"} source</span>
+        <div class="feed-meta">${numberText(maskPixels)} px · ${display.source_width || "--"} x ${display.source_height || "--"}</div>
+      </div>
+      <div class="feed-media-grid">
+        <div class="feed-preview">
+          <span class="feed-preview-label">RGB</span>
+          ${rgb ? `<img alt="${cam} rgb" src="${rgb}" loading="lazy">` : `<div class="feed-empty">no rgb</div>`}
+          ${mask ? `<img class="mask" alt="${cam} mask" src="${mask}">` : ""}
+        </div>
+        <div class="feed-preview depth">
+          <span class="feed-preview-label">Depth</span>
+          ${depth ? `<img alt="${cam} depth" src="${depth}" loading="lazy">` : `<div class="feed-empty">no depth</div>`}
         </div>
       </div>
     `;
@@ -813,13 +1206,13 @@ function updateFrameStatus(manifest, isStale, age) {
 async function refresh() {
   let manifest;
   try {
-    const response = await fetch(BASE + "live_manifest.json", { cache: "no-store" });
+    const response = await fetch(currentBase + "live_manifest.json", { cache: "no-store" });
     manifest = await response.json();
   } catch (error) {
-    setStatus("waiting for live manifest", false);
+    setStatus("waiting for manifest", false);
     dom.streamLabel.textContent = "manifest pending";
     dom.empty.hidden = false;
-    dom.emptyDetail.textContent = BASE;
+    dom.emptyDetail.textContent = currentBase;
     return;
   }
 
@@ -849,8 +1242,47 @@ dom.timelineToggle.addEventListener("click", () => {
   dom.timelineToggle.textContent = hidden ? "Timeline" : "Clean View";
 });
 
+dom.startReplayButton.addEventListener("click", async () => {
+  const session = dom.replaySessionSelect.value;
+  if (!session) return;
+  dom.replayStatus.textContent = "starting";
+  dom.replayMeta.textContent = session;
+  try {
+    const status = await fetchJson("/api/replay/start", {
+      method: "POST",
+      body: JSON.stringify({ session }),
+    });
+    updateReplayUi(status);
+  } catch (error) {
+    dom.replayStatus.textContent = "failed";
+    dom.replayMeta.textContent = error.message;
+  }
+});
+
+dom.stopReplayButton.addEventListener("click", async () => {
+  dom.replayStatus.textContent = "stopping";
+  try {
+    const status = await fetchJson("/api/replay/stop", {
+      method: "POST",
+      body: "{}",
+    });
+    updateReplayUi(status);
+  } catch (error) {
+    dom.replayStatus.textContent = "failed";
+    dom.replayMeta.textContent = error.message;
+  }
+});
+
+dom.replaySessionSelect.addEventListener("change", () => {
+  if (dom.replayStatus.textContent !== "running") {
+    dom.replayMeta.textContent = replaySessionSummary(selectedReplaySession());
+  }
+});
+
 renderCameraStrip({ cameras: CAMS, perception: {} });
+refreshReplayStatus();
 refresh();
+setInterval(refreshReplayStatus, 2000);
 setInterval(refresh, 700);
 </script>
 <script src="active_learning.js"></script>

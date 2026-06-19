@@ -20,7 +20,15 @@ from recon3d.calibration.charuco import (
     summarize_reprojection_errors,
 )
 from recon3d.calibration.io import load_extrinsics, save_extrinsics
-from recon3d.config import CameraExtrinsics, FusionConfig, Nipple3DConfig, PerceptionConfig, Recon3DConfig
+from recon3d.config import (
+    CameraExtrinsics,
+    CloudCleanupConfig,
+    FusionConfig,
+    Nipple3DConfig,
+    PerceptionConfig,
+    Recon3DConfig,
+    SurfaceConfig,
+)
 from recon3d.pipeline import Recon3DPipeline
 from recon3d.sensors.femto_bolt import FemtoBoltCamera, HardwareUnavailableError, OrbbecBagCamera, ReplayRGBDCamera
 from recon3d.sensors.rig import MultiFemtoBoltRig
@@ -52,7 +60,9 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
     """
     raw = _load_yaml_or_json(path)
     perception_raw = raw.get("perception", {})
+    cleanup_raw = raw.get("cloud_cleanup", {})
     fusion_raw = raw.get("fusion", {})
+    surface_raw = raw.get("surface", {})
     nipple_raw = raw.get("nipple3d", {})
     output_dir = output_override or (Path(raw["output_dir"]) if raw.get("output_dir") else None)
     config = Recon3DConfig(
@@ -66,11 +76,26 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
             topk=int(perception_raw.get("topk", 2)),
             nms_iou=float(perception_raw.get("nms_iou", 0.5)),
         ),
+        cloud_cleanup=CloudCleanupConfig(
+            mask_erode_px=int(cleanup_raw.get("mask_erode_px", 4)),
+            flying_depth_edge_threshold_m=float(cleanup_raw.get("flying_depth_edge_threshold_m", 0.015)),
+            min_depth_m=float(cleanup_raw.get("min_depth_m", 0.25)),
+            max_depth_m=float(cleanup_raw.get("max_depth_m", 1.2)),
+        ),
         fusion=FusionConfig(
             voxel_size_m=float(fusion_raw.get("voxel_size_m", 0.002)),
             outlier_nb_neighbors=int(fusion_raw.get("outlier_nb_neighbors", 20)),
             outlier_std_ratio=float(fusion_raw.get("outlier_std_ratio", 2.0)),
             estimate_normals=bool(fusion_raw.get("estimate_normals", False)),
+        ),
+        surface=SurfaceConfig(
+            mesh_enabled=bool(surface_raw.get("mesh_enabled", False)),
+            poisson_depth=int(surface_raw.get("poisson_depth", 8)),
+            density_trim_quantile=float(surface_raw.get("density_trim_quantile", 0.1)),
+            sample_points=int(surface_raw.get("sample_points", 80000)),
+            normal_radius_m=float(surface_raw.get("normal_radius_m", 0.01)),
+            normal_max_nn=int(surface_raw.get("normal_max_nn", 30)),
+            min_points=int(surface_raw.get("min_points", 500)),
         ),
         nipple3d=Nipple3DConfig(
             dbscan_eps_m=float(nipple_raw.get("dbscan_eps_m", 0.005)),

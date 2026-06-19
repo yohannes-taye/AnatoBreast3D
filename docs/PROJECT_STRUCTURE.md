@@ -48,8 +48,6 @@ Medical-breast-segmentation-and-reconstruction/
 |-- utils/                      # legacy helper code used by training/inference
 |-- viewer/                     # browser UI, Rerun iframe shell, active-learning frontend
 |-- work_dirs/                  # experiment checkpoints, best model, TensorBoard event files
-|-- start_recon3d_live.ps1      # root live startup: viewer server + live pipeline
-|-- start_recon3d_live.bat      # Windows convenience wrapper for the PowerShell startup
 |-- requirements.txt            # base software dependencies
 `-- requirements-hardware.txt   # optional Orbbec hardware dependencies
 ```
@@ -62,19 +60,17 @@ Medical-breast-segmentation-and-reconstruction/
 | `.vscode/` | Developer/editor convenience. | Workspace settings. | Safe to ignore for runtime behavior. |
 | `checkpoint/` | Deployed/named perception weights, separate from raw training output. | `breastseg.pth`, `README.md`. | `configs/recon3d/default.yaml` loads `checkpoint/breastseg.pth`. Training still writes `work_dirs/breastseg_b2/best.pth`; copy/rename it here to deploy. Future models can use new subfolders. |
 | `configs/` | Configuration source for both pipeline halves. | `breastseg/breastseg_b2_inplace.py`, `recon3d/default.yaml`. | `breastseg` controls dataset paths, model size, loss weights, optimizer, sampling repeats, and inference thresholds. `recon3d` controls checkpoint path, device, fusion voxel size, nipple 3D thresholds, output path, and sync drift. |
-| `data/` | Local data root consumed by data preparation and loaders. | `data/breastseg/raw_combined`, `dataset3_converted`, `processed_merged`. | `processed_merged` is the default training root: `images/`, `sem_masks/`, `annotations/coco_det.json`, `splits/train.txt`, `splits/val.txt`. Raw/replay RGB-D data can also live under `data/raw/...` when recording support is wired. |
+| `data/` | Local data root consumed by data preparation, loaders, and offline replay. | `data/breastseg/raw_combined`, `data/Replay`, `dataset3_converted`, `processed_merged`. | `processed_merged` is the default training root: `images/`, `sem_masks/`, `annotations/coco_det.json`, `splits/train.txt`, `splits/val.txt`. SDK bag sessions used by the viewer Replay panel live under `data/Replay/<session>/session.json`. |
 | `data_loaders/` | Converts processed data into model-ready PyTorch batches. | `breast_coco.py`. | `BreastCocoDataset` reads images, segmentation masks, COCO nipple boxes, split files, hard-sample repeats, augmentation, letterbox resize, and returns `images`, `gt_seg`, `gt_boxes`, validity masks, and metadata. |
 | `docs/` | Human-facing project knowledge base. | `QUICKSTART.md`, `DATA_LAYOUT.md`, `PROJECT_STRUCTURE.md`. | Documents environment setup, data layout, pipeline commands, coordinate conventions, and folder responsibilities. |
 | `logs/` | Stores training logs. | `train_breastseg_b2_*.log`. | Created by `tools/train_breastseg.py`; useful for checking epoch loss, validation Dice/mIoU/AP, FPS, and checkpoint history. |
 | `nets/` | Core 2D neural network implementation. | `backbone.py`, `segmentors/`, `decode_heads/`, `dense_heads/`, `necks/`, `utils/`. | Defines the MiT backbone, MammaSeg segmentation head, LightFPN, FCOS-style nipple detector, Gaussian prior builder, and multi-task `MammaSegNet`. |
-| `recon3d/` | 3D reconstruction and localisation stack. | `pipeline.py`, `cli.py`, `config.py`, plus subpackages. | Takes synchronized aligned RGB-D frames, runs the existing 2D model, back-projects masked depth, estimates/fuses nipple observations, fuses point clouds, smooths 3D outputs, and writes reconstruction artifacts. |
+| `recon3d/` | 3D reconstruction and localisation stack. | `pipeline.py`, `cli.py`, `config.py`, plus subpackages. | Takes synchronized aligned RGB-D frames, runs the existing 2D model, cleans masks/depth, back-projects masked depth, estimates/fuses nipple observations, fuses point clouds, optionally applies surface smoothing, publishes live viewer artifacts, and writes reconstruction outputs. |
 | `tests/` | Regression protection and demo assets. | `test_pipeline.py`, `test_backproject.py`, `test_fusion.py`, `test_nipple3d.py`, `test_sensors.py`, `singleview/`. | Synthetic tests cover 3D math, replay cameras, config loading, perception pipeline integration, and single-view image/video inference helpers. Hardware is not required for the current tests. |
-| `tools/` | Operational command-line scripts. | `train_breastseg.py`, `infer_demo.py`, `validate.py`, `convert_breast_labelme.py`, `prepare_data.py`, `regenerate_splits.py`, `export_onnx.py`, `model_summary.py`. | This is the user-facing control layer for preparing data, training, validating, visualising predictions, exporting models, and inspecting model size. |
+| `tools/` | Operational command-line scripts. | `run_recon3d_live.py`, `serve_recon3d_viewer.py`, `train_breastseg.py`, `infer_demo.py`, `validate.py`, `convert_breast_labelme.py`, `prepare_data.py`, `regenerate_splits.py`, `export_onnx.py`, `model_summary.py`. | Thin launchers plus the 2D model/data toolchain. `serve_recon3d_viewer.py` serves the browser UI and can launch SDK bag replay through `recon3d.cli replay`; formal 3D runtime behavior belongs in `recon3d.cli` and `recon3d.pipeline`. |
 | `utils/` | Legacy helper utilities. | `utils.py`, `dataloader.py`, `utils_metrics.py`, `callbacks.py`. | Current multi-task training still uses helpers such as `seed_everything`, `cvtColor`, `resize_image`, and `preprocess_input`. |
-| `viewer/` | Browser visualization frontend. | `live.html`, `replay.html`, `active_learning.js`, `active_learning.css`. | `live.html` is the single live visualization page. It embeds the Rerun stream from `live_manifest.json` and hosts the active-learning UI. |
+| `viewer/` | Browser visualization frontend. | `live.html`, `active_learning.js`, `active_learning.css`. | `live.html` is the single visualization page for live and SDK bag replay. It embeds the Rerun stream from `live_manifest.json`, exposes the Replay panel, and hosts the active-learning UI. |
 | `work_dirs/` | Experiment output root. | `breastseg_b2/best.pth`, `epoch_*.pth`, `tensorboard/`. | Training checkpoints and TensorBoard event files live here. Perception loads the deployed copy at `checkpoint/breastseg.pth`. |
-| root startup scripts | Live process launcher. | `start_recon3d_live.ps1`, `start_recon3d_live.bat`. | Starts the viewer/API server and `tools/live_recon.py` from the project root. These scripts intentionally live outside `tools/` because they orchestrate both pipeline and visualization processes. |
-
 ## `configs/`
 
 ```text
@@ -92,9 +88,10 @@ validation metric weighting.
 
 `configs/recon3d/default.yaml` is the RGB-D runtime config. It binds the 3D
 pipeline to the 2D perception checkpoint, extrinsics file, sync tolerance,
-fusion parameters, nipple 3D clustering/fusion parameters, and output folder.
-The browser viewer is started separately by the root `start_recon3d_live.*`
-scripts and served from `viewer/live.html`.
+cloud cleanup, fusion parameters, optional surface smoothing, nipple 3D
+clustering/fusion parameters, and output folder. The formal runtime entry point
+is `python -m recon3d.cli`; the browser viewer is served separately from
+`viewer/live.html`.
 
 ## `data/`
 
@@ -311,7 +308,7 @@ python tools/convert_breast_labelme.py --json-dir ./data/breastseg/raw_combined/
 python tools/regenerate_splits.py --images-dir ./data/breastseg/processed_merged/images --splits-dir ./data/breastseg/processed_merged/splits
 python tools/train_breastseg.py --config configs/breastseg/breastseg_b2_inplace.py
 python tools/infer_demo.py --config configs/breastseg/breastseg_b2_inplace.py --checkpoint checkpoint/breastseg.pth --input tests/singleview/input_vis --save-dir tests/singleview/output_vis
-python -m recon3d.cli replay --config configs/recon3d/default.yaml --bag data/raw/session_001 --out runs/session_001_replay
+python -m recon3d.cli replay --config configs/recon3d/default.yaml --bag-session data/Replay/orbbec_bag_720p_100s --out runs/orbbec_bag_720p_100s_replay --visualize --probe-frames 180 --wait-timeout-ms 5000
 python -m pytest
 ruff check .
 mypy recon3d --strict

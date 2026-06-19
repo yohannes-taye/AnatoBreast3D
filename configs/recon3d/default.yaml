@@ -35,11 +35,26 @@ perception:
   topk: 2
   nms_iou: 0.5
 
+cloud_cleanup:
+  mask_erode_px: 4
+  flying_depth_edge_threshold_m: 0.015
+  min_depth_m: 0.25
+  max_depth_m: 1.2
+
 fusion:
   voxel_size_m: 0.002
   outlier_nb_neighbors: 20
   outlier_std_ratio: 2.0
   estimate_normals: false
+
+surface:
+  mesh_enabled: false
+  poisson_depth: 8
+  density_trim_quantile: 0.1
+  sample_points: 80000
+  normal_radius_m: 0.01
+  normal_max_nn: 30
+  min_points: 500
 
 nipple3d:
   dbscan_eps_m: 0.005

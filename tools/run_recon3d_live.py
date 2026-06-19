@@ -45,6 +45,20 @@ def main() -> None:
     parser.add_argument("--out", default="runs/recon3d_live")
     parser.add_argument("--once", action="store_true", help="Capture and reconstruct one synchronized frame set.")
     parser.add_argument(
+        "--visualize",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Publish live_manifest.json and the embedded rerun stream for viewer/live.html.",
+    )
+    parser.add_argument("--rerun-web-port", type=int, default=9090, help="Port hosting rerun web assets.")
+    parser.add_argument("--rerun-grpc-port", type=int, default=9876, help="Port hosting rerun data.")
+    parser.add_argument("--rerun-mem", default="25%", help="rerun server memory budget.")
+    parser.add_argument("--viewer-rgb-width", type=int, default=640, help="Width of RGB/mask preview images.")
+    parser.add_argument("--color-size", nargs=2, type=int, default=None, metavar=("WIDTH", "HEIGHT"))
+    parser.add_argument("--color-fps", type=int, default=None)
+    parser.add_argument("--color-format", default=None)
+    parser.add_argument("--sync-diagnostics", action="store_true", help="Write FIFO/timestamp diagnostics JSONL.")
+    parser.add_argument(
         "--no-sync-config",
         action="store_true",
         help="Do not write Orbbec multi-device sync settings before capture.",
@@ -66,6 +80,20 @@ def main() -> None:
     ]
     if args.once:
         command.append("--once")
+    if args.visualize:
+        command.append("--visualize")
+        command += ["--rerun-web-port", str(args.rerun_web_port)]
+        command += ["--rerun-grpc-port", str(args.rerun_grpc_port)]
+        command += ["--rerun-mem", str(args.rerun_mem)]
+        command += ["--viewer-rgb-width", str(args.viewer_rgb_width)]
+    if args.color_size is not None:
+        command += ["--color-size", str(args.color_size[0]), str(args.color_size[1])]
+    if args.color_fps is not None:
+        command += ["--color-fps", str(args.color_fps)]
+    if args.color_format is not None:
+        command += ["--color-format", str(args.color_format)]
+    if args.sync_diagnostics:
+        command.append("--sync-diagnostics")
     if args.no_sync_config:
         command.append("--no-sync-config")
 

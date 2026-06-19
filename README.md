@@ -96,12 +96,12 @@ recon3d/
   sensors/                   Orbbec, replay, mock, and multi-camera rig code
   calibration/               Charuco detection and extrinsic estimation
   perception/                BreastSeg inference adapter
-  geometry/                  masked back-projection, fusion, nipple 3D logic
+  geometry/                  cleanup, masked back-projection, fusion, nipple 3D logic
   smoothing/                 temporal filters
   pipeline.py                reference RGB-D reconstruction pipeline
 tools/
-  live_recon.py              formal live three-camera viewer pipeline
-  serve_recon3d_viewer.py    browser viewer and active-learning API server
+  run_recon3d_live.py        thin launcher for python -m recon3d.cli run --visualize
+  serve_recon3d_viewer.py    browser viewer, SDK bag replay, active-learning API
   inspect_charuco_board.py   board/camera inspection utility
   train_breastseg.py         segmentation and detection training entry point
 viewer/
@@ -161,35 +161,10 @@ Notes:
 
 ## Live Operation
 
-The browser dashboard is a separate viewer process. Use the root startup script
-when you want the live pipeline and the single visualization entry together:
-
-```powershell
-cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
-powershell -ExecutionPolicy Bypass -File .\start_recon3d_live.ps1 -OpenBrowser
-```
-
-The dashboard is served at:
-
-```text
-http://127.0.0.1:8765/viewer/live.html
-```
-
-The script opens one PowerShell window for the browser viewer/API server and one
-for realtime capture, segmentation, fusion, and Rerun streaming. Logs are written
-under `runs\recon3d_live\logs\`.
-
-For formal headless reconstruction without the browser dashboard, run the
-pipeline directly:
-
-```powershell
-cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
-conda activate breastseg
-python -m recon3d.cli run --config configs\recon3d\default.yaml --out runs\recon3d_live
-```
-
-For manual debugging, start the same two processes in separate PowerShell or
-conda terminals.
+The formal runtime entry point is `python -m recon3d.cli`. Start the browser
+viewer/API server separately, then run the live camera pipeline with
+`--visualize` so it publishes `live_manifest.json`, preview images, and the Rerun
+stream.
 
 Terminal 1: browser viewer and active-learning API server.
 
@@ -199,13 +174,13 @@ conda activate breastseg
 python tools\serve_recon3d_viewer.py --host 127.0.0.1 --port 8765 --open
 ```
 
-Terminal 2: realtime camera capture, segmentation, fusion, and live manifest
-writer.
+Terminal 2: realtime camera capture, segmentation, fusion, live manifest writer,
+and Rerun publisher.
 
 ```powershell
 cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
 conda activate breastseg
-python tools\live_recon.py --out runs\recon3d_live --config runs\_tmp_live.yaml --color-size 1280 720 --reuse-existing-sync-config --rerun-web-port 9090 --rerun-grpc-port 9876
+python -m recon3d.cli run --config configs\recon3d\default.yaml --out runs\recon3d_live --visualize
 ```
 
 Open the live dashboard:
@@ -219,6 +194,16 @@ camera pipeline is responsible for Orbbec capture, reconstruction, Rerun
 streaming, and `live_manifest.json`. If the UI shows `server offline`, restart
 `tools\serve_recon3d_viewer.py`; that message does not necessarily mean the
 cameras stopped.
+
+The same viewer can start SDK bag replay from the Replay panel. It lists
+`data\Replay\*\session.json`, launches `python -m recon3d.cli replay --visualize`,
+and switches the displayed output to `runs\<bag_session>_replay`.
+
+For a convenience wrapper around the same live command:
+
+```powershell
+python tools\run_recon3d_live.py --config configs\recon3d\default.yaml --out runs\recon3d_live
+```
 
 Manual live-view checks:
 
@@ -289,9 +274,9 @@ runs/recon3d_live/
     cam2_mask.png
 ```
 
-`tools/live_recon.py` also streams RGB, depth, segmentation overlays, 2D nipple
-boxes, timing, and the fused point cloud to the embedded Rerun viewer used by
-`viewer/live.html`.
+`recon3d.pipeline.Recon3DPipeline` also streams RGB, depth, segmentation
+overlays, 2D nipple boxes, timing, and the fused point cloud to the embedded
+Rerun viewer used by `viewer/live.html` when `--visualize` is enabled.
 
 ## Active Learning
 
