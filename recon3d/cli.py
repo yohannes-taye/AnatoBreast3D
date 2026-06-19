@@ -297,6 +297,17 @@ def _read_calibration_frame_set_sequential(
     return frames
 
 
+def _sync_diagnostics_path(args: argparse.Namespace, output_dir: Path | None) -> Path | None:
+    if not getattr(args, "sync_diagnostics", False):
+        return None
+    raw_path = getattr(args, "sync_diagnostics_path", None)
+    if raw_path:
+        return Path(raw_path)
+    if output_dir is not None:
+        return Path(output_dir) / "sync_diagnostics.jsonl"
+    return Path("sync_diagnostics.jsonl")
+
+
 def _charuco_capture_score(
     required_camera_ids: set[str],
     poses: dict[str, Any],
@@ -356,7 +367,11 @@ def cmd_run(args: argparse.Namespace) -> None:
             )
         extrinsics = load_extrinsics(extrinsics_path)
     cameras = [FemtoBoltCamera(cam_id, **kwargs) for cam_id, kwargs in camera_specs]
-    rig = MultiFemtoBoltRig(cameras, max_timestamp_drift_ms=config.sync_max_drift_ms)
+    rig = MultiFemtoBoltRig(
+        cameras,
+        max_timestamp_drift_ms=config.sync_max_drift_ms,
+        sync_diagnostics_path=_sync_diagnostics_path(args, config.output_dir),
+    )
     pipeline = Recon3DPipeline(config, extrinsics, rig=rig)
     if args.once:
         rig.start()
@@ -503,6 +518,19 @@ def _add_viewer_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--open-viewer", action="store_true", help="Open the viewer URL in the default browser.")
 
 
+def _add_sync_diagnostics_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--sync-diagnostics",
+        action="store_true",
+        help="Write SDK FIFO/timestamp diagnostics to JSONL without changing capture policy.",
+    )
+    parser.add_argument(
+        "--sync-diagnostics-path",
+        default=None,
+        help="JSONL path for --sync-diagnostics; defaults to <out>/sync_diagnostics.jsonl.",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build command line parser.
 
@@ -563,6 +591,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use identity extrinsics for a single-camera diagnostic run only.",
     )
+    _add_sync_diagnostics_args(run)
     _add_viewer_args(run)
     run.set_defaults(func=cmd_run)
 

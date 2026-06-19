@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 import cv2
 import numpy as np
@@ -405,6 +406,169 @@ class FemtoBoltCamera:
         """
         _get_context().enable_multi_device_sync(int(timeout_ms))
 
+    @staticmethod
+    def _safe_frame_timestamp(frame: Any, method_name: str) -> int:
+        if frame is None or not hasattr(frame, method_name):
+            return 0
+        try:
+            return int(getattr(frame, method_name)())
+        except Exception:  # noqa: BLE001 - diagnostics must never perturb capture
+            return 0
+
+    @staticmethod
+    def _safe_frame_metadata(frame: Any, metadata_type: Any) -> int:
+        if frame is None or metadata_type is None:
+            return 0
+        try:
+            if hasattr(frame, "has_metadata") and not frame.has_metadata(metadata_type):
+                return 0
+            if hasattr(frame, "get_metadata_value"):
+                return int(frame.get_metadata_value(metadata_type))
+        except Exception:  # noqa: BLE001 - metadata support varies by frame/profile
+            return 0
+        return 0
+
+    @classmethod
+    def _frame_timestamp_details(cls, frame: Any) -> dict[str, int]:
+        timestamp_ms = cls._safe_frame_timestamp(frame, "get_timestamp")
+        timestamp_us = cls._safe_frame_timestamp(frame, "get_timestamp_us")
+        global_us = cls._safe_frame_timestamp(frame, "get_global_timestamp_us")
+        system_us = cls._safe_frame_timestamp(frame, "get_system_timestamp_us")
+        metadata_timestamp = None
+        metadata_sensor_timestamp = None
+        if _ob is not None and hasattr(_ob, "OBFrameMetadataType"):
+            metadata_timestamp = getattr(_ob.OBFrameMetadataType, "TIMESTAMP", None)
+            metadata_sensor_timestamp = getattr(_ob.OBFrameMetadataType, "SENSOR_TIMESTAMP", None)
+        return {
+            "timestamp_ms_ns": max(timestamp_ms * 1_000_000, 0),
+            "timestamp_us_ns": max(timestamp_us * 1000, 0),
+            "global_timestamp_ns": max(global_us * 1000, 0),
+            "system_timestamp_ns": max(system_us * 1000, 0),
+            "metadata_timestamp": cls._safe_frame_metadata(frame, metadata_timestamp),
+            "metadata_sensor_timestamp": cls._safe_frame_metadata(frame, metadata_sensor_timestamp),
+        }
+
+    @staticmethod
+    def _select_frameset_timestamp_ns(
+        color_details: dict[str, int],
+        depth_details: dict[str, int],
+    ) -> tuple[int, str]:
+        for details, key, source in (
+            (color_details, "global_timestamp_ns", "color_global_timestamp_us"),
+            (depth_details, "global_timestamp_ns", "depth_global_timestamp_us"),
+            (color_details, "timestamp_us_ns", "color_timestamp_us"),
+            (depth_details, "timestamp_us_ns", "depth_timestamp_us"),
+            (color_details, "timestamp_ms_ns", "color_timestamp_ms"),
+            (depth_details, "timestamp_ms_ns", "depth_timestamp_ms"),
+            (depth_details, "system_timestamp_ns", "depth_system_timestamp_us"),
+            (color_details, "system_timestamp_ns", "color_system_timestamp_us"),
+        ):
+            value = int(details.get(key) or 0)
+            if value > 0:
+                return value, source
+        return 0, "none"
+
+    def frameset_diagnostics(self, frames) -> dict[str, Any]:
+        """Return lightweight timestamp/completeness metadata for a raw frame set.
+
+        Input shape/unit/frame: ``frames`` is an SDK frame set.
+        Return type: JSON-serializable mapping without image/depth payload bytes.
+        """
+        color = frames.get_color_frame()
+        depth = frames.get_depth_frame()
+        color_timestamps = self._frame_timestamp_details(color)
+        depth_timestamps = self._frame_timestamp_details(depth)
+        timestamp_ns, timestamp_source = self._select_frameset_timestamp_ns(color_timestamps, depth_timestamps)
+        return {
+            "device_timestamp_ns": timestamp_ns,
+            "timestamp_source": timestamp_source,
+            "color_timestamp_ms_ns": color_timestamps["timestamp_ms_ns"],
+            "color_timestamp_us_ns": color_timestamps["timestamp_us_ns"],
+            "color_global_timestamp_ns": color_timestamps["global_timestamp_ns"],
+            "color_system_timestamp_ns": color_timestamps["system_timestamp_ns"],
+            "color_metadata_timestamp": color_timestamps["metadata_timestamp"],
+            "color_metadata_sensor_timestamp": color_timestamps["metadata_sensor_timestamp"],
+            "depth_timestamp_ms_ns": depth_timestamps["timestamp_ms_ns"],
+            "depth_timestamp_us_ns": depth_timestamps["timestamp_us_ns"],
+            "depth_global_timestamp_ns": depth_timestamps["global_timestamp_ns"],
+            "depth_system_timestamp_ns": depth_timestamps["system_timestamp_ns"],
+            "depth_metadata_timestamp": depth_timestamps["metadata_timestamp"],
+            "depth_metadata_sensor_timestamp": depth_timestamps["metadata_sensor_timestamp"],
+            # Backward-compatible aliases for older analysis scripts.
+            "color_device_timestamp_ns": color_timestamps["timestamp_us_ns"],
+            "depth_device_timestamp_ns": depth_timestamps["timestamp_us_ns"],
+            "system_timestamp_ns": color_timestamps["system_timestamp_ns"] or depth_timestamps["system_timestamp_ns"],
+            "has_color": color is not None,
+            "has_depth": depth is not None,
+            "complete": color is not None and depth is not None,
+        }
+
+    def _drain_frames(self, *, record: bool = False) -> dict[str, Any]:
+        if not self._running or self._pipeline is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' is not started")
+        start = time.perf_counter()
+        drained_frames: list[dict[str, Any]] = []
+        count = 0
+        for _ in range(_MAX_FRAME_DRAIN):
+            frames = self._pipeline.wait_for_frames(0)  # non-blocking poll; None when empty
+            if frames is None:
+                break
+            count += 1
+            if record:
+                drained_frames.append(self.frameset_diagnostics(frames))
+        return {
+            "cam_id": self.cam_id,
+            "drain_count": count,
+            "drain_ms": (time.perf_counter() - start) * 1000.0,
+            "hit_max_drain": count >= _MAX_FRAME_DRAIN,
+            "max_drain": _MAX_FRAME_DRAIN,
+            "drained_frames": drained_frames if record else None,
+        }
+
+    def drain_frameset_pool_with_diagnostics(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Drain queued SDK frame sets while keeping raw candidates alive.
+
+        Input shape/unit/frame: no input; non-blocking polling consumes any SDK
+        frames already queued for this camera.
+        Return type: ``(candidates, diagnostics)``. Candidate dictionaries hold
+        raw SDK frame-set references for immediate conversion by the rig; the
+        diagnostics mapping is JSON-serializable.
+        """
+        if not self._running or self._pipeline is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' is not started")
+        start = time.perf_counter()
+        candidates: list[dict[str, Any]] = []
+        drained_frames: list[dict[str, Any]] = []
+        count = 0
+        for index in range(_MAX_FRAME_DRAIN):
+            frames = self._pipeline.wait_for_frames(0)  # non-blocking poll; None when empty
+            if frames is None:
+                break
+            count += 1
+            diagnostics = self.frameset_diagnostics(frames)
+            drained_frames.append(diagnostics)
+            timestamp_ns = int(diagnostics.get("device_timestamp_ns") or 0)
+            if timestamp_ns > 0 and diagnostics.get("complete", False):
+                candidates.append(
+                    {
+                        "frameset": frames,
+                        "timestamp_ns": timestamp_ns,
+                        "source": "drain",
+                        "index": index,
+                        "timestamp_source": diagnostics.get("timestamp_source"),
+                        "diagnostics": diagnostics,
+                    }
+                )
+        return candidates, {
+            "cam_id": self.cam_id,
+            "drain_count": count,
+            "candidate_count": len(candidates),
+            "drain_ms": (time.perf_counter() - start) * 1000.0,
+            "hit_max_drain": count >= _MAX_FRAME_DRAIN,
+            "max_drain": _MAX_FRAME_DRAIN,
+            "drained_frames": drained_frames,
+        }
+
     def flush_frames(self) -> None:
         """Discard every frame set currently queued by the SDK.
 
@@ -418,11 +582,15 @@ class FemtoBoltCamera:
         loop is. Without the flush a slow loop lags behind a growing FIFO backlog
         and the cameras drift apart by whole frame periods.
         """
-        if not self._running or self._pipeline is None:
-            raise RuntimeError(f"Camera '{self.cam_id}' is not started")
-        for _ in range(_MAX_FRAME_DRAIN):
-            if self._pipeline.wait_for_frames(0) is None:  # non-blocking poll; None when empty
-                break
+        self._drain_frames(record=False)
+
+    def flush_frames_with_diagnostics(self) -> dict[str, Any]:
+        """Discard queued frame sets and report every drained raw timestamp.
+
+        Input shape/unit/frame: no input.
+        Return type: JSON-serializable drain metadata.
+        """
+        return self._drain_frames(record=True)
 
     def grab_next_frameset(self):
         """Block for the next raw frame set (no decoding, no draining).
@@ -437,6 +605,21 @@ class FemtoBoltCamera:
             raise RuntimeError(f"Camera '{self.cam_id}' timed out waiting for frames")
         return frames
 
+    def grab_next_frameset_with_diagnostics(self):
+        """Block for the next raw frame set and return lightweight diagnostics."""
+        if not self._running or self._pipeline is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' is not started")
+        start = time.perf_counter()
+        frames = self._pipeline.wait_for_frames(self.wait_timeout_ms)
+        wait_ms = (time.perf_counter() - start) * 1000.0
+        if frames is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' timed out waiting for frames")
+        return frames, {
+            "cam_id": self.cam_id,
+            "grab_wait_ms": wait_ms,
+            "selected_frame": self.frameset_diagnostics(frames),
+        }
+
     def read_aligned_frame(self) -> RGBDFrame:
         """Read one D2C-aligned RGB-D frame from hardware.
 
@@ -446,6 +629,20 @@ class FemtoBoltCamera:
         """
         self.flush_frames()
         return self.frameset_to_rgbd(self.grab_next_frameset())
+
+    def read_aligned_frame_with_diagnostics(self) -> tuple[RGBDFrame, dict[str, Any]]:
+        """Read one aligned frame while reporting SDK FIFO polling diagnostics."""
+        drain = self.flush_frames_with_diagnostics()
+        raw, grab = self.grab_next_frameset_with_diagnostics()
+        timestamp_ns = self.frameset_device_timestamp_ns(raw)
+        frame, conversion = self.frameset_to_rgbd_with_diagnostics(raw, timestamp_ns=timestamp_ns)
+        return frame, {
+            "cam_id": self.cam_id,
+            "drain": drain,
+            "grab": grab,
+            "selected_timestamp_ns": timestamp_ns,
+            "conversion": conversion,
+        }
 
     def frameset_device_timestamp_ns(self, frames) -> int:
         """Hardware (device) timestamp of a raw frame set, in nanoseconds.
@@ -464,12 +661,10 @@ class FemtoBoltCamera:
         """
         color = frames.get_color_frame()
         depth = frames.get_depth_frame()
-        timestamp_us = int(color.get_timestamp_us()) if color is not None else 0
-        if timestamp_us <= 0 and depth is not None and hasattr(depth, "get_timestamp_us"):
-            timestamp_us = int(depth.get_timestamp_us())
-        if timestamp_us <= 0 and color is not None and hasattr(color, "get_system_timestamp_us"):
-            timestamp_us = int(color.get_system_timestamp_us())
-        return max(timestamp_us * 1000, 0)
+        color_timestamps = self._frame_timestamp_details(color)
+        depth_timestamps = self._frame_timestamp_details(depth)
+        timestamp_ns, _ = self._select_frameset_timestamp_ns(color_timestamps, depth_timestamps)
+        return timestamp_ns
 
     def frameset_to_rgbd(self, frames, timestamp_ns: int | None = None) -> RGBDFrame:
         """Align and decode a raw frame set into an ``RGBDFrame``.
@@ -480,14 +675,29 @@ class FemtoBoltCamera:
         Output RGB is HxWx3 uint8 and depth HxW raw units on the same (color) grid.
         Return type: ``RGBDFrame``.
         """
+        frame, _ = self.frameset_to_rgbd_with_diagnostics(frames, timestamp_ns=timestamp_ns)
+        return frame
+
+    def frameset_to_rgbd_with_diagnostics(
+        self,
+        frames,
+        timestamp_ns: int | None = None,
+    ) -> tuple[RGBDFrame, dict[str, Any]]:
+        """Align/decode a raw frame set and report conversion timing metadata."""
+        total_start = time.perf_counter()
         if timestamp_ns is None:
             timestamp_ns = self.frameset_device_timestamp_ns(frames)
 
+        raw_info = self.frameset_diagnostics(frames)
+        align_start = time.perf_counter()
         if self._align is not None:
             frames = self._align.process(frames)
             if hasattr(frames, "as_frame_set"):
                 frames = frames.as_frame_set()
+        align_ms = (time.perf_counter() - align_start) * 1000.0
+        aligned_info = self.frameset_diagnostics(frames)
 
+        decode_start = time.perf_counter()
         color_frame = frames.get_color_frame()
         depth_frame = frames.get_depth_frame()
         if color_frame is None or depth_frame is None:
@@ -514,7 +724,7 @@ class FemtoBoltCamera:
             intrinsics = self._rescale_intrinsics(intrinsics, rgb.shape[1], rgb.shape[0])
             self._intrinsics = intrinsics
 
-        return RGBDFrame(
+        frame = RGBDFrame(
             cam_id=self.cam_id,
             rgb=rgb,
             depth_mm=depth_raw,
@@ -522,6 +732,16 @@ class FemtoBoltCamera:
             intrinsics=intrinsics,
             depth_config=self._depth_config,
         )
+        diagnostics = {
+            "cam_id": self.cam_id,
+            "timestamp_ns": timestamp_ns,
+            "raw_frame": raw_info,
+            "aligned_frame": aligned_info,
+            "align_ms": align_ms,
+            "decode_ms": (time.perf_counter() - decode_start) * 1000.0,
+            "total_ms": (time.perf_counter() - total_start) * 1000.0,
+        }
+        return frame, diagnostics
 
     def get_intrinsics(self) -> CameraIntrinsics:
         """Return color intrinsics (valid after ``start``).

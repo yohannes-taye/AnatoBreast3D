@@ -88,6 +88,16 @@ def main() -> None:
     ap.add_argument("--rerun-grpc-port", type=int, default=9876, help="Port hosting the rerun gRPC data stream.")
     ap.add_argument("--rerun-mem", default="25%", help="rerun server memory budget; old frames are dropped past it.")
     ap.add_argument(
+        "--sync-diagnostics",
+        action="store_true",
+        help="Write SDK FIFO/timestamp diagnostics to JSONL without changing capture policy.",
+    )
+    ap.add_argument(
+        "--sync-diagnostics-path",
+        default=None,
+        help="JSONL path for --sync-diagnostics; defaults to <out>/sync_diagnostics.jsonl.",
+    )
+    ap.add_argument(
         "--record",
         action="store_true",
         help="Also save the rerun stream to runs/.../recordings/*.rrd for later replay.",
@@ -95,6 +105,13 @@ def main() -> None:
     args = ap.parse_args()
 
     out = Path(args.out); live = out / "live"; live.mkdir(parents=True, exist_ok=True)
+    sync_diag_path = (
+        Path(args.sync_diagnostics_path)
+        if args.sync_diagnostics and args.sync_diagnostics_path
+        else out / "sync_diagnostics.jsonl"
+        if args.sync_diagnostics
+        else None
+    )
     cfg, ext_path = load_recon_config(Path(args.config), out)
     ext = load_extrinsics(ext_path)
     cams = [
@@ -108,7 +125,11 @@ def main() -> None:
         )
         for c, s, m in SPECS
     ]
-    rig = MultiFemtoBoltRig(cams, max_timestamp_drift_ms=1e9)
+    rig = MultiFemtoBoltRig(
+        cams,
+        max_timestamp_drift_ms=cfg.sync_max_drift_ms,
+        sync_diagnostics_path=sync_diag_path,
+    )
     perc = BreastPerceptionAdapter(config=cfg)
     fusion = PointCloudFusionBackend(FusionConfig(voxel_size_m=args.voxel, outlier_std_ratio=args.outlier_std))
     cam_centers = [ext[c].T_world_cam[:3, 3] for c, _, _ in SPECS if c in ext]
@@ -161,18 +182,26 @@ def main() -> None:
         for rec in RECS:
             RR.log(path, archetype, recording=rec)
 
+    def read_live_frames() -> dict:
+        return rig.read_synchronized_frames()
+
     rig.start()
     print("Live recon started. Ctrl+C to stop.", flush=True)
     try:
         for _ in range(15):
-            for cam in rig.cameras:
-                try: cam.read_aligned_frame()
-                except Exception: pass
+            try:
+                rig.read_synchronized_frames()
+            except Exception:
+                pass
         frame_i = 0
         while True:
             t0 = time.perf_counter()
             frame_wall = time.time()
-            frames = {cam.cam_id: cam.read_aligned_frame() for cam in rig.cameras}
+            try:
+                frames = read_live_frames()
+            except RuntimeError as exc:
+                print(f"Skipping frame set: {exc}", flush=True)
+                continue
             t_read = time.perf_counter()
             if RR is not None:
                 rr_set_clock(frame_i, frame_wall)
