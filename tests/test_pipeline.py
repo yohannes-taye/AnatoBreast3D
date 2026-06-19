@@ -54,3 +54,32 @@ def test_pipeline_writes_expected_outputs(tmp_path) -> None:
     summary = json.loads((tmp_path / "run_summary.json").read_text(encoding="utf-8"))
     assert summary["fused_cloud"]["points"] > 0
     assert summary["metrics"]["timestamp_drift_ms"] == 0.2
+
+
+def test_pipeline_starts_viewer_when_enabled(tmp_path, monkeypatch) -> None:
+    calls = []
+
+    def fake_start_viewer_server(**kwargs):
+        calls.append(kwargs)
+        return "http://127.0.0.1:8765/viewer/"
+
+    monkeypatch.setattr("recon3d.pipeline.start_viewer_server", fake_start_viewer_server)
+    config = Recon3DConfig(
+        output_dir=tmp_path,
+        enable_visualization=True,
+        viewer_host="127.0.0.1",
+        viewer_port=8899,
+        viewer_open_browser=True,
+    )
+
+    pipeline = Recon3DPipeline(config, {}, perception=_MaskOnlyPerception())
+
+    assert pipeline.viewer_url == "http://127.0.0.1:8765/viewer/"
+    assert calls == [
+        {
+            "host": "127.0.0.1",
+            "port": 8899,
+            "output_dir": tmp_path,
+            "open_browser": True,
+        }
+    ]

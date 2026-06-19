@@ -87,7 +87,8 @@ validation metric weighting.
 
 `configs/recon3d/default.yaml` is the RGB-D runtime config. It binds the 3D
 pipeline to the 2D perception checkpoint, extrinsics file, sync tolerance,
-fusion parameters, nipple 3D clustering/fusion parameters, and output folder.
+fusion parameters, nipple 3D clustering/fusion parameters, output folder, and
+embedded viewer server settings.
 
 ## `data/`
 

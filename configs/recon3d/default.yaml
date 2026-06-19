@@ -1,7 +1,10 @@
 output_dir: runs/recon3d_live
 extrinsics_path: configs/recon3d/extrinsics.json
 sync_max_drift_ms: 5.0
-enable_visualization: false
+enable_visualization: true
+viewer_host: 127.0.0.1
+viewer_port: 8765
+viewer_open_browser: false
 
 # Hardware camera settings used by:
 #   python -m recon3d.cli run --config configs/recon3d/default.yaml
@@ -13,20 +16,20 @@ enable_visualization: false
 hardware:
   align_mode: hw
   color_format: RGB
-  color_fps: 0
-  color_size: null
+  color_fps: 30
+  color_size: [1280, 720]
   wait_timeout_ms: 1000
   apply_sync_config: true
   cameras:
     - id: cam0
       serial_number: "CL8T754004D"
-      sync_mode: secondary
+      sync_mode: primary
     - id: cam1
       serial_number: "CL8T7540197"
-      sync_mode: secondary
+      sync_mode: secondary_synced
     - id: cam2
       serial_number: "CL8T75400XA"
-      sync_mode: primary
+      sync_mode: secondary_synced
 
 perception:
   model_config_path: configs/breastseg/breastseg_b2_inplace.py

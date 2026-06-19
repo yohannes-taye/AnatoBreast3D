@@ -718,7 +718,23 @@
   <script>
     "use strict";
 
+    function queryOutputBase() {
+      const value = new URLSearchParams(window.location.search).get("base");
+      if (!value || /^https?:\/\//i.test(value) || value.startsWith("//")) {
+        return null;
+      }
+      return `${value.replace(/\\/g, "/").replace(/\/+$/, "")}/`;
+    }
+
+    const ACTIVE_OUTPUT_BASE = queryOutputBase();
     const RUNS = [
+      ...(ACTIVE_OUTPUT_BASE ? [{
+        id: "current",
+        label: "Current pipeline output",
+        base: ACTIVE_OUTPUT_BASE,
+        cameras: "configured cameras",
+        calibration: "configured extrinsics"
+      }] : []),
       {
         id: "recon3d_live",
         label: "Live three-camera reconstruction",

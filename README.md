@@ -161,13 +161,32 @@ Notes:
 
 ## Live Operation
 
-The live system uses two long-running processes. Start them in two separate
-PowerShell or conda terminals.
+The formal `Recon3DPipeline` starts the browser viewer automatically when
+`enable_visualization: true` is set in `configs/recon3d/default.yaml`:
+
+```powershell
+cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
+conda activate breastseg
+python -m recon3d.cli run --config configs\recon3d\default.yaml --out runs\recon3d_live
+```
+
+The embedded viewer is served at:
+
+```text
+http://127.0.0.1:8765/viewer/
+```
+
+Use `--open-viewer` to open the browser automatically, `--viewer-port` to choose
+a different port, or `--no-visualize` to keep the pipeline headless.
+
+The Rerun-backed `tools\live_recon.py` path still uses two long-running
+processes. Start them in two separate PowerShell or conda terminals when you
+need the live iframe and Active Learning API.
 
 Terminal 1: browser viewer and active-learning API server.
 
 ```powershell
-cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\Breast-3DV7
+cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
 conda activate breastseg
 python tools\serve_recon3d_viewer.py --host 127.0.0.1 --port 8765
 ```
@@ -176,7 +195,7 @@ Terminal 2: realtime camera capture, segmentation, fusion, and live manifest
 writer.
 
 ```powershell
-cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\Breast-3DV7
+cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
 conda activate breastseg
 python tools\live_recon.py --out runs\recon3d_live --config runs\_tmp_live.yaml --color-size 1280 720 --reuse-existing-sync-config
 ```

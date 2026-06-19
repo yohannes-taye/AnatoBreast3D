@@ -44,6 +44,9 @@ Important fields:
 
 ```yaml
 extrinsics_path: configs/recon3d/extrinsics.json
+enable_visualization: true
+viewer_host: 127.0.0.1
+viewer_port: 8765
 perception:
   model_config_path: configs/breastseg/breastseg_b2_inplace.py
   checkpoint_path: checkpoint/breastseg.pth
@@ -106,6 +109,10 @@ python -m recon3d.cli run \
   --out runs/live \
   --cameras cam0 cam1 cam2
 ```
+
+With the default config, the pipeline starts the embedded browser viewer at
+`http://127.0.0.1:8765/viewer/`. Use `--open-viewer` to open it automatically,
+or `--no-visualize` for a headless run.
 
 Expected hardware mode:
 

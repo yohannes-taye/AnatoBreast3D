@@ -37,6 +37,12 @@ _SYNC_MODE_NAMES = {
     "hardware_triggering": "HARDWARE_TRIGGERING",
 }
 
+# Upper bound on how many buffered frame sets a single grab will drain to reach the
+# newest one. A slow consumer loop lets the SDK FIFO grow; draining keeps reads on
+# the freshest synchronized trigger. 30 fps over a ~1.5 s worst-case backlog is ~45
+# frames, so this is a generous safety cap rather than a tuning knob.
+_MAX_FRAME_DRAIN = 128
+
 _CONTEXT = None  # lazily created singleton pyorbbecsdk.Context shared by all cameras
 
 
@@ -399,6 +405,38 @@ class FemtoBoltCamera:
         """
         _get_context().enable_multi_device_sync(int(timeout_ms))
 
+    def flush_frames(self) -> None:
+        """Discard every frame set currently queued by the SDK.
+
+        Input shape/unit/frame: no input.
+        Return type: ``None``.
+
+        The multi-camera rig flushes all cameras back-to-back and then reads the
+        next frame from each. After the queues are empty, the next frame each
+        camera delivers is the next hardware-synced trigger, so all cameras land on
+        the same trigger (identical timestamps) regardless of how slow the consumer
+        loop is. Without the flush a slow loop lags behind a growing FIFO backlog
+        and the cameras drift apart by whole frame periods.
+        """
+        if not self._running or self._pipeline is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' is not started")
+        for _ in range(_MAX_FRAME_DRAIN):
+            if self._pipeline.wait_for_frames(0) is None:  # non-blocking poll; None when empty
+                break
+
+    def grab_next_frameset(self):
+        """Block for the next raw frame set (no decoding, no draining).
+
+        Input shape/unit/frame: returns an unaligned SDK frame set.
+        Return type: pyorbbecsdk frame set.
+        """
+        if not self._running or self._pipeline is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' is not started")
+        frames = self._pipeline.wait_for_frames(self.wait_timeout_ms)
+        if frames is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' timed out waiting for frames")
+        return frames
+
     def read_aligned_frame(self) -> RGBDFrame:
         """Read one D2C-aligned RGB-D frame from hardware.
 
@@ -406,11 +444,31 @@ class FemtoBoltCamera:
         raw units on the same (color) grid; raw depth -> metres via depth scale.
         Return type: ``RGBDFrame``.
         """
-        if not self._running or self._pipeline is None:
-            raise RuntimeError(f"Camera '{self.cam_id}' is not started")
-        frames = self._pipeline.wait_for_frames(self.wait_timeout_ms)
-        if frames is None:
-            raise RuntimeError(f"Camera '{self.cam_id}' timed out waiting for frames")
+        self.flush_frames()
+        return self.frameset_to_rgbd(self.grab_next_frameset())
+
+    def frameset_to_rgbd(self, frames) -> RGBDFrame:
+        """Align and decode a raw frame set into an ``RGBDFrame``.
+
+        Input shape/unit/frame: ``frames`` is a raw SDK frame set from
+        ``grab_next_frameset``; output RGB is HxWx3 uint8 and depth HxW raw units
+        on the same (color) grid.
+        Return type: ``RGBDFrame``.
+        """
+        # Read the hardware (device) timestamp from the RAW frame set, before
+        # alignment. The AlignFilter output frame instead carries a host/global
+        # timestamp stamped when each camera's frame is processed, which is staggered
+        # by per-camera processing order and would desync the multi-camera rig by
+        # whole frame periods. The raw device timestamp is identical across
+        # hardware-synced cameras for the same trigger.
+        raw_color = frames.get_color_frame()
+        raw_depth = frames.get_depth_frame()
+        timestamp_us = int(raw_color.get_timestamp_us()) if raw_color is not None else 0
+        if timestamp_us <= 0 and raw_depth is not None and hasattr(raw_depth, "get_timestamp_us"):
+            timestamp_us = int(raw_depth.get_timestamp_us())
+        if timestamp_us <= 0 and raw_color is not None and hasattr(raw_color, "get_system_timestamp_us"):
+            timestamp_us = int(raw_color.get_system_timestamp_us())
+
         if self._align is not None:
             frames = self._align.process(frames)
             if hasattr(frames, "as_frame_set"):
@@ -442,11 +500,6 @@ class FemtoBoltCamera:
             intrinsics = self._rescale_intrinsics(intrinsics, rgb.shape[1], rgb.shape[0])
             self._intrinsics = intrinsics
 
-        timestamp_us = int(color_frame.get_timestamp_us())
-        if timestamp_us <= 0 and hasattr(depth_frame, "get_timestamp_us"):
-            timestamp_us = int(depth_frame.get_timestamp_us())
-        if timestamp_us <= 0 and hasattr(color_frame, "get_system_timestamp_us"):
-            timestamp_us = int(color_frame.get_system_timestamp_us())
         timestamp_ns = max(timestamp_us * 1000, 0)
         return RGBDFrame(
             cam_id=self.cam_id,

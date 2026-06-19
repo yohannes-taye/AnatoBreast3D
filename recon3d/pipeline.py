@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import atexit
 import json
 import logging
+from pathlib import Path
+import threading
 import time
 from typing import Mapping
+from urllib.parse import quote
+import webbrowser
 
 import numpy as np
 import open3d as o3d
@@ -28,10 +33,104 @@ from recon3d.smoothing.temporal import OneEuroFilter3D
 
 
 LOGGER = logging.getLogger(__name__)
+_VIEWER_LOCK = threading.Lock()
+_VIEWER_SERVER: object | None = None
+_VIEWER_THREAD: threading.Thread | None = None
+_VIEWER_ROOT: Path | None = None
+_VIEWER_BASE_URL: str | None = None
+_VIEWER_ATEXIT_REGISTERED = False
 
 
 def _now_ms(start: float) -> float:
     return (time.perf_counter() - start) * 1000.0
+
+
+def _is_viewer_running() -> bool:
+    return _VIEWER_SERVER is not None and _VIEWER_THREAD is not None and _VIEWER_THREAD.is_alive()
+
+
+def _viewer_url_for_output(base_url: str, root: Path, output_dir: Path | None) -> str:
+    if output_dir is None:
+        return base_url
+    try:
+        rel = output_dir.resolve().relative_to(root.resolve())
+    except ValueError:
+        return base_url
+    base = f"../{rel.as_posix().rstrip('/')}/"
+    return f"{base_url}?base={quote(base, safe='')}"
+
+
+def stop_viewer_server() -> None:
+    """Stop the embedded Recon3D viewer server if this process started it."""
+    global _VIEWER_BASE_URL, _VIEWER_ROOT, _VIEWER_SERVER, _VIEWER_THREAD
+    with _VIEWER_LOCK:
+        server = _VIEWER_SERVER
+        if server is None:
+            return
+        shutdown = getattr(server, "shutdown", None)
+        server_close = getattr(server, "server_close", None)
+        if callable(shutdown):
+            shutdown()
+        if callable(server_close):
+            server_close()
+        _VIEWER_SERVER = None
+        _VIEWER_THREAD = None
+        _VIEWER_ROOT = None
+        _VIEWER_BASE_URL = None
+
+
+def start_viewer_server(
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    output_dir: Path | None = None,
+    open_browser: bool = False,
+) -> str:
+    """Start the browser viewer/API server in a background thread.
+
+    Input shape/unit/frame: host/port are HTTP bind settings; output_dir is the
+    reconstruction output folder to load in the viewer when it is under the
+    project root.
+    Return type: viewer URL string.
+    """
+    global _VIEWER_ATEXIT_REGISTERED, _VIEWER_BASE_URL, _VIEWER_ROOT, _VIEWER_SERVER, _VIEWER_THREAD
+    with _VIEWER_LOCK:
+        if _is_viewer_running() and _VIEWER_BASE_URL is not None and _VIEWER_ROOT is not None:
+            url = _viewer_url_for_output(_VIEWER_BASE_URL, _VIEWER_ROOT, output_dir)
+            if open_browser:
+                webbrowser.open(url)
+            return url
+
+        from tools.serve_recon3d_viewer import ROOT, make_server
+
+        server = None
+        chosen_port = port
+        for candidate_port in range(port, port + 20):
+            try:
+                server = make_server(host, candidate_port, ROOT)
+                chosen_port = candidate_port
+                break
+            except OSError:
+                continue
+        if server is None:
+            raise RuntimeError(f"No free viewer port found from {port} to {port + 19}")
+
+        thread = threading.Thread(target=server.serve_forever, name="recon3d-viewer-server", daemon=True)
+        thread.start()
+        _VIEWER_SERVER = server
+        _VIEWER_THREAD = thread
+        _VIEWER_ROOT = ROOT
+        browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+        _VIEWER_BASE_URL = f"http://{browser_host}:{chosen_port}/viewer/"
+        if not _VIEWER_ATEXIT_REGISTERED:
+            atexit.register(stop_viewer_server)
+            _VIEWER_ATEXIT_REGISTERED = True
+
+        url = _viewer_url_for_output(_VIEWER_BASE_URL, ROOT, output_dir)
+        LOGGER.info("Recon3D viewer server started at %s", url)
+        if open_browser:
+            webbrowser.open(url)
+        return url
 
 
 class Recon3DPipeline:
@@ -58,6 +157,17 @@ class Recon3DPipeline:
         self.perception = perception or BreastPerceptionAdapter(config=config)
         self.fusion_backend = fusion_backend or PointCloudFusionBackend(config.fusion)
         self._filters = {"left": OneEuroFilter3D(), "right": OneEuroFilter3D()}
+        self.viewer_url: str | None = None
+        if self.config.enable_visualization:
+            try:
+                self.viewer_url = start_viewer_server(
+                    host=self.config.viewer_host,
+                    port=self.config.viewer_port,
+                    output_dir=self.config.output_dir,
+                    open_browser=self.config.viewer_open_browser,
+                )
+            except Exception as exc:  # noqa: BLE001 - visualization should not stop reconstruction
+                LOGGER.warning("Recon3D viewer server could not start: %s", exc)
 
     def _validate_frames(self, frames: Mapping[str, RGBDFrame]) -> int:
         if not frames:
