@@ -142,6 +142,8 @@ class FemtoBoltCamera:
         align_mode: str = "hw",
         wait_timeout_ms: int = 1000,
         apply_sync_config: bool = True,
+        record_path: Path | str | None = None,
+        record_compression: bool = True,
     ) -> None:
         """Create a hardware camera wrapper.
 
@@ -167,12 +169,15 @@ class FemtoBoltCamera:
         self.color_gain = color_gain
         self.wait_timeout_ms = int(wait_timeout_ms)
         self.apply_sync_config = apply_sync_config
+        self.record_path = Path(record_path) if record_path is not None else None
+        self.record_compression = bool(record_compression)
 
         self._sdk_available = self._check_sdk()
         self._running = False
         self._pipeline = None
         self._device = None
         self._align = None
+        self._record_device = None
         self._intrinsics: CameraIntrinsics | None = None
         self._depth_config = DepthConfig(depth_scale_m=0.001)
 
@@ -341,6 +346,13 @@ class FemtoBoltCamera:
             )
         self._device = self._resolve_device()
         self._apply_color_controls()
+        if self.record_path is not None:
+            self.record_path.parent.mkdir(parents=True, exist_ok=True)
+            self._record_device = _ob.RecordDevice(
+                self._device,
+                str(self.record_path),
+                self.record_compression,
+            )
 
         # Apply multi-device hardware sync role before streaming (skip for standalone).
         if self.apply_sync_config and self.sync_mode != "standalone":
@@ -388,6 +400,11 @@ class FemtoBoltCamera:
         Input shape/unit/frame: no input.
         Return type: ``None``.
         """
+        if self._record_device is not None:
+            try:
+                self._record_device.pause()
+            except Exception:  # noqa: BLE001 - best-effort recording teardown
+                LOGGER.exception("[%s] error while pausing recorder", self.cam_id)
         self._running = False
         if self._pipeline is not None:
             try:
@@ -396,7 +413,40 @@ class FemtoBoltCamera:
                 LOGGER.exception("[%s] error while stopping pipeline", self.cam_id)
             self._pipeline = None
         self._align = None
+        self._record_device = None
         self._device = None
+
+    def resume_recording(self) -> None:
+        """Start or resume SDK bag recording for this camera."""
+        if self._record_device is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' has no RecordDevice configured")
+        self._record_device.resume()
+
+    def begin_recording(self, record_path: Path | str, *, compression: bool = True) -> None:
+        """Create and start an SDK bag recorder for an already-running camera."""
+        if not self._running or self._device is None:
+            raise RuntimeError(f"Camera '{self.cam_id}' must be started before recording begins")
+        if _ob is None:
+            raise HardwareUnavailableError(
+                "pyorbbecsdk is not importable; cannot create an Orbbec RecordDevice"
+            )
+        if self._record_device is not None:
+            raise RuntimeError(f"Camera '{self.cam_id}' already has a RecordDevice configured")
+        self.record_path = Path(record_path)
+        self.record_compression = bool(compression)
+        self.record_path.parent.mkdir(parents=True, exist_ok=True)
+        self._record_device = _ob.RecordDevice(
+            self._device,
+            str(self.record_path),
+            self.record_compression,
+        )
+        self._record_device.resume()
+        LOGGER.info("[%s] SDK bag recording started: %s", self.cam_id, self.record_path)
+
+    def pause_recording(self) -> None:
+        """Pause SDK bag recording for this camera."""
+        if self._record_device is not None:
+            self._record_device.pause()
 
     def enable_multi_device_sync(self, timeout_ms: int = 60000) -> None:
         """Enable Orbbec context-level multi-device synchronization.
@@ -460,8 +510,6 @@ class FemtoBoltCamera:
             (depth_details, "timestamp_us_ns", "depth_timestamp_us"),
             (color_details, "timestamp_ms_ns", "color_timestamp_ms"),
             (depth_details, "timestamp_ms_ns", "depth_timestamp_ms"),
-            (depth_details, "system_timestamp_ns", "depth_system_timestamp_us"),
-            (color_details, "system_timestamp_ns", "color_system_timestamp_us"),
         ):
             value = int(details.get(key) or 0)
             if value > 0:
@@ -761,6 +809,276 @@ class FemtoBoltCamera:
         Return type: ``DepthConfig``.
         """
         return self._depth_config
+
+
+class OrbbecBagCamera(FemtoBoltCamera):
+    """SDK ``.bag`` playback camera that behaves like a live Femto Bolt stream."""
+
+    def __init__(
+        self,
+        cam_id: str,
+        bag_path: Path | str,
+        *,
+        align_mode: str = "hw",
+        wait_timeout_ms: int = 1000,
+        playback_rate: float | None = None,
+        start_timestamp_ns: int | None = None,
+    ) -> None:
+        """Create a camera backed by ``pyorbbecsdk.PlaybackDevice``.
+
+        Input shape/unit/frame: ``bag_path`` is one SDK ``.bag`` for one physical
+        camera. ``start_timestamp_ns`` drops earlier frames after playback starts
+        so multi-bag replay can crop to a common T0 without rewriting the bag.
+        Return type: ``OrbbecBagCamera``.
+        """
+        super().__init__(
+            cam_id,
+            sync_mode="standalone",
+            align_mode=align_mode,
+            wait_timeout_ms=wait_timeout_ms,
+            apply_sync_config=False,
+        )
+        self.bag_path = Path(bag_path)
+        self.playback_rate = playback_rate
+        self.start_timestamp_ns = start_timestamp_ns
+        self._playback = None
+        self._playback_status = None
+        self._paused_at_sync_start = False
+
+    def _playback_stopped(self) -> bool:
+        if _ob is None or self._playback is None:
+            return False
+        stopped = getattr(_ob.OBPlaybackStatus, "STOPPED", None)
+        try:
+            status = self._playback.get_playback_status()
+        except Exception:  # noqa: BLE001 - status is advisory; wait_for_frames is authoritative
+            status = self._playback_status
+        return stopped is not None and status == stopped
+
+    def _on_playback_status_change(self, status) -> None:
+        self._playback_status = status
+
+    def resume_playback_stream(self) -> None:
+        """Resume playback after all bag cameras have cropped to the same T0."""
+        if self._playback is not None and self._paused_at_sync_start:
+            self._playback.resume()
+            self._paused_at_sync_start = False
+
+    def _select_playback_profiles(self, config) -> object:
+        """Enable color/depth streams from the bag and return the color profile."""
+        use_software_align = self.align_mode == "sw"
+        if self.align_mode == "hw":
+            try:
+                color_profile, depth_profile = self._select_hw_d2c_profiles()
+                config.enable_stream(depth_profile)
+                config.enable_stream(color_profile)
+                config.set_align_mode(_ob.OBAlignMode.HW_MODE)
+                return color_profile
+            except Exception as exc:  # noqa: BLE001 - playback profile lists vary by SDK/bag
+                LOGGER.warning(
+                    "[%s] bag hardware D2C setup unavailable; trying software/raw playback: %s",
+                    self.cam_id,
+                    exc,
+                )
+                use_software_align = True
+
+        color_profiles = self._pipeline.get_stream_profile_list(_ob.OBSensorType.COLOR_SENSOR)
+        color_profile = color_profiles.get_default_video_stream_profile()
+        config.enable_stream(color_profile)
+        depth_profiles = self._pipeline.get_stream_profile_list(_ob.OBSensorType.DEPTH_SENSOR)
+        config.enable_stream(depth_profiles.get_default_video_stream_profile())
+        if use_software_align:
+            if hasattr(_ob, "OBFrameAggregateOutputMode"):
+                config.set_frame_aggregate_output_mode(_ob.OBFrameAggregateOutputMode.FULL_FRAME_REQUIRE)
+            config.set_align_mode(_ob.OBAlignMode.DISABLE)
+            self._align = _ob.AlignFilter(align_to_stream=_ob.OBStreamType.COLOR_STREAM)
+        return color_profile
+
+    def _skip_to_start_timestamp(self) -> None:
+        if self.start_timestamp_ns is None:
+            return
+        dropped = 0
+        while True:
+            frames = self.grab_next_frameset()
+            timestamp_ns = self.frameset_device_timestamp_ns(frames)
+            if timestamp_ns >= int(self.start_timestamp_ns):
+                # Keep the frame by converting it into the next-read buffer used by
+                # drain/grab candidates. There is no push-back API, so store one raw
+                # frame set locally and let the next grab return it.
+                self._pending_frameset = frames
+                LOGGER.info(
+                    "[%s] bag T0 crop dropped %d frame sets; first kept timestamp=%d",
+                    self.cam_id,
+                    dropped,
+                    timestamp_ns,
+                )
+                return
+            dropped += 1
+
+    def start(self) -> None:
+        """Start SDK playback for this bag."""
+        if not self._sdk_available:
+            raise HardwareUnavailableError(
+                "pyorbbecsdk is not importable; cannot replay Orbbec .bag files. "
+                f"Original import error: {_OB_IMPORT_ERROR!r}"
+            )
+        if not self.bag_path.is_file():
+            raise FileNotFoundError(f"Orbbec bag not found: {self.bag_path}")
+        self._playback = _ob.PlaybackDevice(str(self.bag_path))
+        self._device = self._playback
+        self._pipeline = _ob.Pipeline(self._playback)
+        self._align = None
+        self._pending_frameset = None
+        self._playback_status = None
+        self._paused_at_sync_start = False
+        try:
+            self._playback.set_playback_status_change_callback(self._on_playback_status_change)
+        except Exception:  # noqa: BLE001 - older bindings may not expose callback consistently
+            LOGGER.debug("[%s] playback status callback unavailable", self.cam_id, exc_info=True)
+        if self.playback_rate is not None:
+            self._playback.set_playback_rate(float(self.playback_rate))
+
+        config = _ob.Config()
+        color_profile = self._select_playback_profiles(config)
+        self._intrinsics = self._intrinsics_from_profile(color_profile)
+        self._pipeline.start(config)
+        self._running = True
+        self._skip_to_start_timestamp()
+        if self.start_timestamp_ns is not None:
+            try:
+                self._playback.pause()
+                self._paused_at_sync_start = True
+            except Exception:  # noqa: BLE001 - fall back to normal SDK playback
+                LOGGER.debug("[%s] bag playback pause-at-T0 unavailable", self.cam_id, exc_info=True)
+        LOGGER.info("[%s] Orbbec bag playback started: %s", self.cam_id, self.bag_path)
+
+    def stop(self) -> None:
+        """Stop SDK playback."""
+        self._running = False
+        if self._pipeline is not None:
+            try:
+                self._pipeline.stop()
+            except Exception:  # noqa: BLE001 - best-effort teardown
+                LOGGER.exception("[%s] error while stopping bag playback", self.cam_id)
+        self._pipeline = None
+        self._device = None
+        self._playback = None
+        self._align = None
+        self._pending_frameset = None
+        self._paused_at_sync_start = False
+
+    def _drain_frames(self, *, record: bool = False) -> dict[str, Any]:
+        if not self._running or self._pipeline is None:
+            raise RuntimeError(f"Bag camera '{self.cam_id}' is not started")
+        start = time.perf_counter()
+        drained_frames: list[dict[str, Any]] = []
+        count = 0
+        pending = getattr(self, "_pending_frameset", None)
+        if pending is not None:
+            self._pending_frameset = None
+            count += 1
+            if record:
+                drained_frames.append(self.frameset_diagnostics(pending))
+        for _ in range(_MAX_FRAME_DRAIN):
+            frames = self._pipeline.wait_for_frames(0)
+            if frames is None:
+                break
+            count += 1
+            if record:
+                drained_frames.append(self.frameset_diagnostics(frames))
+        return {
+            "cam_id": self.cam_id,
+            "drain_count": count,
+            "drain_ms": (time.perf_counter() - start) * 1000.0,
+            "hit_max_drain": count >= _MAX_FRAME_DRAIN,
+            "max_drain": _MAX_FRAME_DRAIN,
+            "drained_frames": drained_frames if record else None,
+        }
+
+    def drain_frameset_pool_with_diagnostics(self) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if not self._running or self._pipeline is None:
+            raise RuntimeError(f"Bag camera '{self.cam_id}' is not started")
+        start = time.perf_counter()
+        candidates: list[dict[str, Any]] = []
+        drained_frames: list[dict[str, Any]] = []
+        count = 0
+        pending = getattr(self, "_pending_frameset", None)
+        if pending is not None:
+            self._pending_frameset = None
+            diagnostics = self.frameset_diagnostics(pending)
+            drained_frames.append(diagnostics)
+            timestamp_ns = int(diagnostics.get("device_timestamp_ns") or 0)
+            if timestamp_ns > 0 and diagnostics.get("complete", False):
+                candidates.append(
+                    {
+                        "frameset": pending,
+                        "timestamp_ns": timestamp_ns,
+                        "source": "pending",
+                        "index": None,
+                        "timestamp_source": diagnostics.get("timestamp_source"),
+                        "diagnostics": diagnostics,
+                    }
+                )
+            count += 1
+        for index in range(_MAX_FRAME_DRAIN):
+            frames = self._pipeline.wait_for_frames(0)
+            if frames is None:
+                break
+            diagnostics = self.frameset_diagnostics(frames)
+            drained_frames.append(diagnostics)
+            timestamp_ns = int(diagnostics.get("device_timestamp_ns") or 0)
+            if timestamp_ns > 0 and diagnostics.get("complete", False):
+                candidates.append(
+                    {
+                        "frameset": frames,
+                        "timestamp_ns": timestamp_ns,
+                        "source": "drain",
+                        "index": index,
+                        "timestamp_source": diagnostics.get("timestamp_source"),
+                        "diagnostics": diagnostics,
+                    }
+                )
+            count += 1
+        return candidates, {
+            "cam_id": self.cam_id,
+            "drain_count": count,
+            "candidate_count": len(candidates),
+            "drain_ms": (time.perf_counter() - start) * 1000.0,
+            "hit_max_drain": count >= _MAX_FRAME_DRAIN,
+            "max_drain": _MAX_FRAME_DRAIN,
+            "drained_frames": drained_frames,
+        }
+
+    def grab_next_frameset(self):
+        if not self._running or self._pipeline is None:
+            raise RuntimeError(f"Bag camera '{self.cam_id}' is not started")
+        pending = getattr(self, "_pending_frameset", None)
+        if pending is not None:
+            self._pending_frameset = None
+            return pending
+        frames = self._pipeline.wait_for_frames(self.wait_timeout_ms)
+        if frames is None:
+            if self._playback_stopped():
+                raise StopIteration(f"Orbbec bag camera '{self.cam_id}' exhausted")
+            try:
+                duration_ms = int(self._playback.get_duration()) if self._playback is not None else 0
+                position_ms = int(self._playback.get_position()) if self._playback is not None else 0
+            except Exception:  # noqa: BLE001 - fall back to timeout semantics
+                duration_ms = 0
+                position_ms = 0
+            if duration_ms > 0 and position_ms >= duration_ms:
+                raise StopIteration(f"Orbbec bag camera '{self.cam_id}' exhausted")
+            raise RuntimeError(f"Bag camera '{self.cam_id}' timed out waiting for frames")
+        return frames
+
+    def grab_next_frameset_with_diagnostics(self):
+        start = time.perf_counter()
+        frames = self.grab_next_frameset()
+        return frames, {
+            "cam_id": self.cam_id,
+            "grab_wait_ms": (time.perf_counter() - start) * 1000.0,
+            "selected_frame": self.frameset_diagnostics(frames),
+        }
 
 
 class ReplayRGBDCamera:

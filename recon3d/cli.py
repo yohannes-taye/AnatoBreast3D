@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
 import re
+import time
 from typing import Any
 
 import cv2
@@ -20,7 +22,7 @@ from recon3d.calibration.charuco import (
 from recon3d.calibration.io import load_extrinsics, save_extrinsics
 from recon3d.config import CameraExtrinsics, FusionConfig, Nipple3DConfig, PerceptionConfig, Recon3DConfig
 from recon3d.pipeline import Recon3DPipeline
-from recon3d.sensors.femto_bolt import FemtoBoltCamera, HardwareUnavailableError, ReplayRGBDCamera
+from recon3d.sensors.femto_bolt import FemtoBoltCamera, HardwareUnavailableError, OrbbecBagCamera, ReplayRGBDCamera
 from recon3d.sensors.rig import MultiFemtoBoltRig
 
 
@@ -128,6 +130,436 @@ def _build_replay_rig(bag: Path, max_drift_ms: float) -> MultiFemtoBoltRig:
         raise FileNotFoundError(f"No replay camera folders with metadata.json found under {bag}")
     cameras = [ReplayRGBDCamera(path.name, path) for path in camera_dirs]
     return MultiFemtoBoltRig(cameras, max_timestamp_drift_ms=max_drift_ms)
+
+
+def _parse_bag_entries(entries: list[str] | None) -> dict[str, Path]:
+    """Parse ``cam_id=path.bag`` CLI values."""
+    bags: dict[str, Path] = {}
+    for entry in entries or []:
+        if "=" not in entry:
+            raise ValueError(f"Bag entries must use cam_id=path.bag form, got: {entry}")
+        cam_id, raw_path = entry.split("=", 1)
+        cam_id = cam_id.strip()
+        if not cam_id:
+            raise ValueError(f"Bag entry has empty camera id: {entry}")
+        if cam_id in bags:
+            raise ValueError(f"Duplicate bag camera id: {cam_id}")
+        bags[cam_id] = Path(raw_path)
+    return bags
+
+
+def _load_bag_session(path: Path) -> dict[str, Path]:
+    """Load a Recon3D SDK-bag session manifest."""
+    manifest_path = path / "session.json" if path.is_dir() else path
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    cameras = data.get("cameras")
+    if not isinstance(cameras, list) or not cameras:
+        raise ValueError(f"Bag session has no cameras: {manifest_path}")
+    bags: dict[str, Path] = {}
+    for entry in cameras:
+        if not isinstance(entry, dict):
+            raise ValueError(f"Bag session camera entries must be mappings: {manifest_path}")
+        cam_id = str(entry.get("id") or entry.get("cam_id") or "")
+        rel_bag = entry.get("bag") or entry.get("bag_path")
+        if not cam_id or not rel_bag:
+            raise ValueError(f"Bag session camera missing id/bag: {entry}")
+        bag_path = Path(rel_bag)
+        if not bag_path.is_absolute():
+            bag_path = manifest_path.parent / bag_path
+        bags[cam_id] = bag_path
+    return bags
+
+
+def _timestamp_source_family(source: str | None) -> str:
+    source = str(source or "")
+    if "global_timestamp" in source:
+        return "global"
+    if "timestamp_us" in source or "timestamp_ms" in source:
+        return "hardware"
+    if "metadata" in source or "sensor" in source:
+        return "metadata"
+    if "system" in source:
+        return "system"
+    return "none"
+
+
+def _summarize_values(values: list[float]) -> dict[str, float | None]:
+    if not values:
+        return {"min": None, "max": None, "mean": None}
+    return {
+        "min": min(values),
+        "max": max(values),
+        "mean": sum(values) / len(values),
+    }
+
+
+def _orbbec_sdk_version() -> str | None:
+    try:
+        import pyorbbecsdk as ob  # type: ignore
+    except Exception:  # noqa: BLE001 - optional hardware dependency
+        return None
+    return str(getattr(ob, "__version__", "") or "") or None
+
+
+def _frame_timestamp_stats(frames: dict[str, Any]) -> tuple[dict[str, int], float, int]:
+    timestamps = {cam_id: int(frame.timestamp_ns) for cam_id, frame in frames.items()}
+    missing = [cam_id for cam_id, timestamp_ns in timestamps.items() if timestamp_ns <= 0]
+    if missing:
+        raise RuntimeError(f"Synchronized frame set has missing SDK timestamps: {missing}")
+    drift_ms = (max(timestamps.values()) - min(timestamps.values())) / 1_000_000.0
+    common_t0_ns = max(timestamps.values())
+    return timestamps, drift_ms, common_t0_ns
+
+
+def _sync_event_brief(rig: MultiFemtoBoltRig) -> str:
+    event = getattr(rig, "last_sync_event", None)
+    if not isinstance(event, dict):
+        return "no sync diagnostics yet"
+    parts = [f"reason={event.get('drop_reason') or 'none'}"]
+    best_pool = event.get("best_pool_match")
+    if isinstance(best_pool, dict):
+        best_drift_ms = best_pool.get("best_drift_ms")
+        if best_drift_ms is not None:
+            parts.append(f"best_pool_drift={float(best_drift_ms):.3f}ms")
+        candidate_counts = best_pool.get("candidate_counts")
+        if candidate_counts:
+            parts.append(f"candidates={candidate_counts}")
+    for key in ("chosen_pre_conversion_drift_ms", "pre_conversion_drift_ms"):
+        value = event.get(key)
+        if value is not None:
+            parts.append(f"{key}={float(value):.3f}ms")
+            break
+    selected_drifts = event.get("selected_source_drifts_ms")
+    if isinstance(selected_drifts, dict) and selected_drifts:
+        compact = ", ".join(
+            f"{name}={float(value):.3f}ms"
+            for name, value in sorted(selected_drifts.items())[:3]
+        )
+        parts.append(f"source_drifts=({compact})")
+    return " ".join(parts)
+
+
+def _wait_for_record_ready_t0(
+    rig: MultiFemtoBoltRig,
+    *,
+    timeout_s: float,
+    log_interval_s: float,
+) -> dict[str, Any]:
+    if timeout_s <= 0:
+        raise ValueError("--record-ready-timeout-s must be positive")
+    if log_interval_s <= 0:
+        raise ValueError("--record-ready-log-interval-s must be positive")
+
+    start = time.perf_counter()
+    deadline = start + timeout_s
+    next_log = start + log_interval_s
+    attempts = 0
+    dropped = 0
+    last_error = ""
+    LOGGER.info(
+        "Record status: phase=ready elapsed=0.0s/%.1fs attempts=0 dropped=0 "
+        "bag_writing=not_started",
+        timeout_s,
+    )
+    while True:
+        attempts += 1
+        try:
+            frames = rig.read_synchronized_frames()
+        except RuntimeError as exc:
+            dropped += 1
+            last_error = str(exc)
+            now = time.perf_counter()
+            if now >= deadline:
+                raise RuntimeError(
+                    "Timed out waiting for record-ready synchronized T0 before creating bag recorders. "
+                    f"attempts={attempts} dropped={dropped} last_error={last_error!r} "
+                    f"latest_sync='{_sync_event_brief(rig)}'. Check Orbbec metadata timestamps, "
+                    "hardware sync cabling/modes, and camera stream readiness."
+                ) from exc
+            if now >= next_log:
+                LOGGER.info(
+                    "Record status: phase=ready elapsed=%.1fs/%.1fs attempts=%d dropped=%d "
+                    "bag_writing=not_started last_error=%s sync=%s",
+                    now - start,
+                    timeout_s,
+                    attempts,
+                    dropped,
+                    last_error,
+                    _sync_event_brief(rig),
+                )
+                next_log = now + log_interval_s
+            continue
+        except StopIteration as exc:
+            raise RuntimeError("Camera stream ended before record-ready synchronized T0 was found") from exc
+
+        timestamps, drift_ms, t0_ns = _frame_timestamp_stats(frames)
+        elapsed_s = time.perf_counter() - start
+        LOGGER.info(
+            "Record status: phase=ready complete=true elapsed=%.2fs attempts=%d dropped=%d "
+            "t0_ns=%d drift=%.3fms timestamps=%s",
+            elapsed_s,
+            attempts,
+            dropped,
+            t0_ns,
+            drift_ms,
+            timestamps,
+        )
+        return {
+            "ready_t0_ns": t0_ns,
+            "ready_t0_timestamps_ns": timestamps,
+            "ready_t0_drift_ms": drift_ms,
+            "ready_attempts": attempts,
+            "ready_dropped": dropped,
+            "ready_elapsed_s": elapsed_s,
+        }
+
+
+def _powershell_arg(value: str | Path) -> str:
+    text = str(value)
+    if text == "":
+        return "''"
+    if re.search(r"[\s'`$&|<>;(){}\[\]]", text):
+        return "'" + text.replace("'", "''") + "'"
+    return text
+
+
+def _record_replay_command(config_path: Path, bag_session: Path) -> str:
+    replay_out = Path("runs") / f"{bag_session.name}_replay"
+    parts: list[str | Path] = [
+        "conda",
+        "run",
+        "-n",
+        "breastseg",
+        "python",
+        "-m",
+        "recon3d.cli",
+        "replay",
+        "--config",
+        config_path,
+        "--bag-session",
+        bag_session,
+        "--out",
+        replay_out,
+        "--no-visualize",
+        "--sync-diagnostics",
+        "--probe-frames",
+        "180",
+        "--wait-timeout-ms",
+        "5000",
+    ]
+    return " ".join(_powershell_arg(part) for part in parts)
+
+
+def _format_size_bytes(size_bytes: int) -> str:
+    value = float(max(0, size_bytes))
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024.0 or unit == "TiB":
+            if unit == "B":
+                return f"{int(value)}{unit}"
+            return f"{value:.1f}{unit}"
+        value /= 1024.0
+    return f"{value:.1f}TiB"
+
+
+def _bag_size_status(bag_paths: dict[str, Path]) -> str:
+    parts: list[str] = []
+    for cam_id, bag_path in sorted(bag_paths.items()):
+        try:
+            size_text = _format_size_bytes(bag_path.stat().st_size)
+        except FileNotFoundError:
+            size_text = "pending"
+        parts.append(f"{cam_id}={size_text}")
+    return " ".join(parts)
+
+
+def _drift_status(drift_values_ms: list[float]) -> str:
+    if not drift_values_ms:
+        return "n/a"
+    latest = drift_values_ms[-1]
+    return (
+        f"last={latest:.3f}ms "
+        f"min={min(drift_values_ms):.3f}ms "
+        f"max={max(drift_values_ms):.3f}ms "
+        f"mean={sum(drift_values_ms) / len(drift_values_ms):.3f}ms"
+    )
+
+
+def _log_recording_status(
+    *,
+    phase: str = "recording",
+    start_perf: float,
+    duration_s: float,
+    accepted: int,
+    dropped: int,
+    drift_values_ms: list[float],
+    bag_paths: dict[str, Path],
+    last_error: str | None = None,
+) -> None:
+    elapsed_s = max(0.0, time.perf_counter() - start_perf)
+    remaining_s = max(0.0, duration_s - elapsed_s)
+    total = accepted + dropped
+    accepted_fps = accepted / elapsed_s if elapsed_s > 0 else 0.0
+    accept_rate = (accepted / total * 100.0) if total > 0 else 0.0
+    last_error_text = f" last_error={last_error[:180]}" if last_error else ""
+    LOGGER.info(
+        "Record status: phase=%s elapsed=%.1fs/%.1fs remaining=%.1fs "
+        "accepted=%d dropped=%d accepted_fps=%.2f accept_rate=%.1f%% drift=(%s) bags=(%s)%s",
+        phase,
+        elapsed_s,
+        duration_s,
+        remaining_s,
+        accepted,
+        dropped,
+        accepted_fps,
+        accept_rate,
+        _drift_status(drift_values_ms),
+        _bag_size_status(bag_paths),
+        last_error_text,
+    )
+
+
+def _probe_orbbec_bag_timestamps(
+    bags: dict[str, Path],
+    *,
+    align_mode: str,
+    wait_timeout_ms: int,
+    playback_rate: float | None,
+    probe_frames: int,
+    max_drift_ms: float,
+) -> tuple[int, dict[str, Any]]:
+    """Probe SDK playback timestamps and choose the common T0 crop timestamp."""
+    if len(bags) == 0:
+        raise ValueError("No Orbbec bag files provided")
+    samples: dict[str, list[dict[str, Any]]] = {}
+    for cam_id, bag_path in sorted(bags.items()):
+        camera = OrbbecBagCamera(
+            cam_id,
+            bag_path,
+            align_mode=align_mode,
+            wait_timeout_ms=wait_timeout_ms,
+            playback_rate=playback_rate,
+        )
+        camera.start()
+        try:
+            cam_samples: list[dict[str, Any]] = []
+            while len(cam_samples) < probe_frames:
+                try:
+                    frameset = camera.grab_next_frameset()
+                except StopIteration:
+                    break
+                diagnostics = camera.frameset_diagnostics(frameset)
+                if diagnostics.get("complete") and int(diagnostics.get("device_timestamp_ns") or 0) > 0:
+                    cam_samples.append(diagnostics)
+            samples[cam_id] = cam_samples
+        finally:
+            camera.stop()
+
+    missing = [cam_id for cam_id, values in samples.items() if not values]
+    if missing:
+        raise RuntimeError(f"No timestamped complete frames found in bags: {missing}")
+
+    families = {
+        cam_id: {
+            _timestamp_source_family(str(sample.get("timestamp_source")))
+            for sample in values[: min(len(values), probe_frames)]
+        }
+        for cam_id, values in samples.items()
+    }
+    bad = {
+        cam_id: sorted(values)
+        for cam_id, values in families.items()
+        if not values or values <= {"none"} or "system" in values
+    }
+    if bad:
+        raise RuntimeError(
+            "Bag replay timestamps are not reliable for sync; "
+            f"system/empty timestamp sources found: {bad}"
+        )
+    non_system_families = {family for values in families.values() for family in values if family != "none"}
+    if len(non_system_families) > 1:
+        raise RuntimeError(
+            "Bag replay timestamps mix clock families and cannot be compared safely: "
+            f"{ {cam_id: sorted(values) for cam_id, values in families.items()} }"
+        )
+
+    for cam_id, values in samples.items():
+        timestamps = [int(value["device_timestamp_ns"]) for value in values]
+        if any(b <= a for a, b in zip(timestamps, timestamps[1:])):
+            raise RuntimeError(f"Bag timestamps are not strictly increasing for {cam_id}")
+
+    first_timestamps = {
+        cam_id: int(values[0]["device_timestamp_ns"])
+        for cam_id, values in samples.items()
+    }
+    t0_ns = max(first_timestamps.values())
+    first_after_t0: dict[str, int] = {}
+    first_after_sources: dict[str, str] = {}
+    for cam_id, values in samples.items():
+        chosen = next(
+            (value for value in values if int(value["device_timestamp_ns"]) >= t0_ns),
+            None,
+        )
+        if chosen is None:
+            raise RuntimeError(
+                f"Probe did not include a frame at/after common T0 for {cam_id}; "
+                f"increase --probe-frames (current {probe_frames})"
+            )
+        first_after_t0[cam_id] = int(chosen["device_timestamp_ns"])
+        first_after_sources[cam_id] = str(chosen.get("timestamp_source"))
+
+    drift_ms = (max(first_after_t0.values()) - min(first_after_t0.values())) / 1_000_000.0
+    if drift_ms > max_drift_ms:
+        raise RuntimeError(
+            f"Common-T0 bag timestamp drift {drift_ms:.3f} ms exceeds limit {max_drift_ms:.3f} ms"
+        )
+
+    summary = {
+        "probe_frames": probe_frames,
+        "first_timestamps_ns": first_timestamps,
+        "t0_ns": t0_ns,
+        "first_after_t0_ns": first_after_t0,
+        "first_after_t0_sources": first_after_sources,
+        "first_after_t0_drift_ms": drift_ms,
+        "timestamp_source_families": {cam_id: sorted(values) for cam_id, values in families.items()},
+    }
+    return t0_ns, summary
+
+
+def _build_orbbec_bag_rig(
+    bags: dict[str, Path],
+    *,
+    config: Recon3DConfig,
+    align_mode: str,
+    wait_timeout_ms: int,
+    playback_rate: float | None,
+    probe_frames: int,
+    sync_diagnostics_path: Path | None,
+) -> tuple[MultiFemtoBoltRig, dict[str, Any]]:
+    t0_ns, summary = _probe_orbbec_bag_timestamps(
+        bags,
+        align_mode=align_mode,
+        wait_timeout_ms=wait_timeout_ms,
+        playback_rate=playback_rate,
+        probe_frames=probe_frames,
+        max_drift_ms=config.sync_max_drift_ms,
+    )
+    cameras = [
+        OrbbecBagCamera(
+            cam_id,
+            bag_path,
+            align_mode=align_mode,
+            wait_timeout_ms=wait_timeout_ms,
+            playback_rate=playback_rate,
+            start_timestamp_ns=t0_ns,
+        )
+        for cam_id, bag_path in sorted(bags.items())
+    ]
+    rig = MultiFemtoBoltRig(
+        cameras,
+        max_timestamp_drift_ms=config.sync_max_drift_ms,
+        sync_diagnostics_path=sync_diagnostics_path,
+    )
+    return rig, summary
 
 
 def _optional_pair(value: Any, name: str) -> tuple[int, int] | None:
@@ -329,17 +761,86 @@ def _charuco_capture_score(
 
 
 def cmd_replay(args: argparse.Namespace) -> None:
-    """Run reconstruction from saved replay RGB-D data.
+    """Run reconstruction from saved RGB-D data.
 
-    Input shape/unit/frame: replay bag stores RGB PNG and raw depth PNG per camera.
+    Input shape/unit/frame: SDK bag replay uses one Orbbec ``.bag`` per camera;
+    legacy replay uses one RGB/depth PNG folder per camera.
     Return type: ``None``.
     """
-    config, extrinsics_path = load_recon_config(Path(args.config), Path(args.out) if args.out else None)
+    config_path = Path(args.config)
+    raw_config = _load_yaml_or_json(config_path)
+    hardware_raw = raw_config.get("hardware", {}) or {}
+    if not isinstance(hardware_raw, dict):
+        raise ValueError("hardware config must be a mapping")
+    config, extrinsics_path = load_recon_config(config_path, Path(args.out) if args.out else None)
     config = _apply_viewer_overrides(config, args)
     extrinsics = load_extrinsics(extrinsics_path)
-    rig = _build_replay_rig(Path(args.bag), config.sync_max_drift_ms)
+    bag_session = Path(args.bag_session) if args.bag_session else None
+    explicit_bags = _parse_bag_entries(args.bags)
+    legacy_or_session_bag = Path(args.bag) if args.bag else None
+    source_count = int(bag_session is not None) + int(bool(explicit_bags)) + int(legacy_or_session_bag is not None)
+    if source_count == 0:
+        raise ValueError("Provide --bag-session, --bags cam0=... cam1=..., or legacy --bag directory")
+    if source_count > 1:
+        raise ValueError("Use exactly one replay source: --bag-session, --bags, or --bag")
+
+    sdk_bags: dict[str, Path] = {}
+    if bag_session is not None:
+        sdk_bags = _load_bag_session(bag_session)
+    elif explicit_bags:
+        sdk_bags = explicit_bags
+    elif legacy_or_session_bag is not None and (
+        legacy_or_session_bag.suffix.lower() == ".json"
+        or (legacy_or_session_bag.is_dir() and (legacy_or_session_bag / "session.json").is_file())
+    ):
+        sdk_bags = _load_bag_session(legacy_or_session_bag)
+
+    if sdk_bags:
+        align_mode = args.align_mode or str(hardware_raw.get("align_mode", "hw"))
+        wait_timeout_ms = (
+            int(args.wait_timeout_ms)
+            if args.wait_timeout_ms is not None
+            else int(hardware_raw.get("wait_timeout_ms", 1000))
+        )
+        rig, timestamp_summary = _build_orbbec_bag_rig(
+            sdk_bags,
+            config=config,
+            align_mode=align_mode,
+            wait_timeout_ms=wait_timeout_ms,
+            playback_rate=args.playback_rate,
+            probe_frames=int(args.probe_frames),
+            sync_diagnostics_path=_sync_diagnostics_path(args, config.output_dir),
+        )
+        LOGGER.info("Orbbec bag timestamp probe: %s", json.dumps(timestamp_summary, sort_keys=True))
+    elif legacy_or_session_bag is not None:
+        if legacy_or_session_bag.suffix.lower() == ".bag":
+            raise ValueError("Single .bag replay is ambiguous; use --bags cam_id=path.bag for every camera")
+        rig = _build_replay_rig(legacy_or_session_bag, config.sync_max_drift_ms)
+    else:
+        raise ValueError("No replay source resolved")
+
     pipeline = Recon3DPipeline(config, extrinsics, rig=rig)
-    pipeline.run_stream()
+    max_frames = getattr(args, "max_frames", None)
+    if max_frames is None:
+        pipeline.run_stream()
+        return
+
+    rig.start()
+    processed = 0
+    try:
+        while processed < int(max_frames):
+            try:
+                frames = rig.read_synchronized_frames()
+            except StopIteration:
+                break
+            except RuntimeError as exc:
+                LOGGER.warning("Skipping frame set: %s", exc)
+                continue
+            pipeline.run_once(frames)
+            processed += 1
+    finally:
+        rig.stop()
+    LOGGER.info("Replay processed %d frame sets", processed)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -385,14 +886,250 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 
 def cmd_record(args: argparse.Namespace) -> None:
-    """Record raw synchronized RGB-D data from hardware.
+    """Record raw Orbbec SDK bag files from synchronized hardware streams.
 
-    Input shape/unit/frame: hardware frames are aligned RGB-D with depth mm.
+    Input shape/unit/frame: records one SDK ``.bag`` per camera and validates
+    synchronized frame sets using the same live-stream rig path.
     Return type: ``None``.
     """
-    raise HardwareUnavailableError(
-        "Recording requires verified pyorbbecsdk hardware integration; replay/mock support is available now"
+    config_path = Path(args.config)
+    raw_config = _load_yaml_or_json(config_path)
+    config, _ = load_recon_config(config_path, Path(args.out))
+    camera_specs = _hardware_camera_specs(args, raw_config)
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if int(args.warmup_frames) < 0:
+        raise ValueError("--warmup-frames must be non-negative")
+    if float(args.duration) <= 0:
+        raise ValueError("--duration must be positive")
+    if float(args.record_ready_timeout_s) <= 0:
+        raise ValueError("--record-ready-timeout-s must be positive")
+    if float(args.record_ready_log_interval_s) <= 0:
+        raise ValueError("--record-ready-log-interval-s must be positive")
+    if float(args.record_status_interval_s) <= 0:
+        raise ValueError("--record-status-interval-s must be positive")
+    duration_s = float(args.duration)
+    status_interval_s = float(args.record_status_interval_s)
+
+    cameras: list[FemtoBoltCamera] = []
+    manifest_cameras: list[dict[str, Any]] = []
+    bag_paths: dict[str, Path] = {}
+    for cam_id, kwargs in camera_specs:
+        bag_path = out_dir / f"{cam_id}.bag"
+        if bag_path.exists() and not args.overwrite:
+            raise FileExistsError(f"Refusing to overwrite existing bag: {bag_path} (pass --overwrite)")
+        if bag_path.exists():
+            bag_path.unlink()
+        bag_paths[cam_id] = bag_path
+        camera_kwargs = dict(kwargs)
+        cameras.append(FemtoBoltCamera(cam_id, **camera_kwargs))
+        manifest_cameras.append(
+            {
+                "id": cam_id,
+                "bag": bag_path.name,
+                "serial_number": camera_kwargs.get("serial_number"),
+                "sync_mode": camera_kwargs.get("sync_mode"),
+                "align_mode": camera_kwargs.get("align_mode"),
+                "color_size": list(camera_kwargs["color_size"]) if camera_kwargs.get("color_size") else None,
+                "color_fps": camera_kwargs.get("color_fps"),
+                "color_format": camera_kwargs.get("color_format"),
+                "wait_timeout_ms": camera_kwargs.get("wait_timeout_ms"),
+            }
+        )
+
+    rig = MultiFemtoBoltRig(
+        cameras,
+        max_timestamp_drift_ms=config.sync_max_drift_ms,
+        sync_diagnostics_path=_sync_diagnostics_path(args, out_dir),
     )
+    accepted = 0
+    dropped = 0
+    drift_values_ms: list[float] = []
+    last_timestamps_ns: dict[str, int] = {}
+    stream_started_at_utc = datetime.now(timezone.utc).isoformat()
+    record_started_at_utc: str | None = None
+    record_start_perf = 0.0
+    ready_info: dict[str, Any] = {}
+    warmup_accepted = 0
+    warmup_dropped = 0
+    stop_reason = "duration_complete"
+    last_recording_error = ""
+    LOGGER.info("Starting SDK bag recording stream: cameras=%s out=%s", [cam.cam_id for cam in cameras], out_dir)
+    rig.start()
+    try:
+        ready_info = _wait_for_record_ready_t0(
+            rig,
+            timeout_s=float(args.record_ready_timeout_s),
+            log_interval_s=float(args.record_ready_log_interval_s),
+        )
+
+        for _ in range(int(args.warmup_frames)):
+            try:
+                rig.read_synchronized_frames()
+            except RuntimeError as exc:
+                warmup_dropped += 1
+                LOGGER.warning("Post-T0 warmup skipped frame set: %s", exc)
+            else:
+                warmup_accepted += 1
+        if int(args.warmup_frames) > 0:
+            LOGGER.info(
+                "Post-T0 warmup completed before bag writing: accepted=%d dropped=%d",
+                warmup_accepted,
+                warmup_dropped,
+            )
+
+        LOGGER.info(
+            "Creating SDK bag recorders after synchronized T0; first written frames will be post-T0"
+        )
+        for camera in cameras:
+            camera.begin_recording(
+                bag_paths[camera.cam_id],
+                compression=not bool(args.no_compression),
+            )
+        record_started_at_utc = datetime.now(timezone.utc).isoformat()
+        record_start_perf = time.perf_counter()
+        deadline = record_start_perf + duration_s
+        next_status_perf = record_start_perf + status_interval_s
+        LOGGER.info(
+            "Recording SDK bags for %.3f seconds from ready_t0_ns=%s",
+            duration_s,
+            ready_info.get("ready_t0_ns"),
+        )
+        _log_recording_status(
+            start_perf=record_start_perf,
+            duration_s=duration_s,
+            accepted=accepted,
+            dropped=dropped,
+            drift_values_ms=drift_values_ms,
+            bag_paths=bag_paths,
+            last_error=last_recording_error,
+        )
+        while time.perf_counter() < deadline:
+            try:
+                frames = rig.read_synchronized_frames()
+            except RuntimeError as exc:
+                dropped += 1
+                last_recording_error = str(exc)
+                LOGGER.debug("Recording skipped frame set: %s", exc)
+                now = time.perf_counter()
+                if now >= next_status_perf:
+                    _log_recording_status(
+                        start_perf=record_start_perf,
+                        duration_s=duration_s,
+                        accepted=accepted,
+                        dropped=dropped,
+                        drift_values_ms=drift_values_ms,
+                        bag_paths=bag_paths,
+                        last_error=last_recording_error,
+                    )
+                    last_recording_error = ""
+                    next_status_perf = now + status_interval_s
+                continue
+            timestamps, drift_ms, _ = _frame_timestamp_stats(frames)
+            drift_values_ms.append(drift_ms)
+            last_timestamps_ns = timestamps
+            accepted += 1
+            now = time.perf_counter()
+            if now >= next_status_perf:
+                _log_recording_status(
+                    start_perf=record_start_perf,
+                    duration_s=duration_s,
+                    accepted=accepted,
+                    dropped=dropped,
+                    drift_values_ms=drift_values_ms,
+                    bag_paths=bag_paths,
+                    last_error=last_recording_error,
+                )
+                last_recording_error = ""
+                next_status_perf = now + status_interval_s
+    except KeyboardInterrupt:
+        stop_reason = "keyboard_interrupt"
+        if record_start_perf > 0:
+            LOGGER.warning(
+                "Manual stop requested with Ctrl+C; stopping recorders and writing session manifest"
+            )
+        else:
+            LOGGER.warning(
+                "Manual stop requested with Ctrl+C before bag writing started; stopping cameras"
+            )
+    finally:
+        for camera in cameras:
+            try:
+                camera.pause_recording()
+            except Exception:  # noqa: BLE001 - continue teardown for every camera
+                LOGGER.exception("[%s] failed to pause recorder", camera.cam_id)
+        rig.stop()
+
+    elapsed_s = max(0.0, time.perf_counter() - record_start_perf) if record_start_perf > 0 else 0.0
+    if record_start_perf > 0:
+        _log_recording_status(
+            phase="stopped",
+            start_perf=record_start_perf,
+            duration_s=duration_s,
+            accepted=accepted,
+            dropped=dropped,
+            drift_values_ms=drift_values_ms,
+            bag_paths=bag_paths,
+            last_error=last_recording_error,
+        )
+    elif stop_reason == "keyboard_interrupt":
+        LOGGER.warning("Stopped before bag writing started; no replayable bag session was written")
+        return
+    manifest = {
+        "schema": "recon3d_orbbec_bag_session_v1",
+        "created_at_utc": stream_started_at_utc,
+        "stream_started_at_utc": stream_started_at_utc,
+        "record_started_at_utc": record_started_at_utc,
+        "duration_s": elapsed_s,
+        "requested_duration_s": duration_s,
+        "stop_reason": stop_reason,
+        "manual_stop": stop_reason == "keyboard_interrupt",
+        "completed": stop_reason == "duration_complete",
+        "pyorbbecsdk_version": _orbbec_sdk_version(),
+        "config": str(config_path),
+        "sync_max_drift_ms": config.sync_max_drift_ms,
+        "record_compression": not bool(args.no_compression),
+        "record_started_after_t0": True,
+        "ready_t0_ns": ready_info.get("ready_t0_ns"),
+        "ready_t0_timestamps_ns": ready_info.get("ready_t0_timestamps_ns", {}),
+        "ready_t0_drift_ms": ready_info.get("ready_t0_drift_ms"),
+        "ready_attempts": ready_info.get("ready_attempts", 0),
+        "ready_dropped": ready_info.get("ready_dropped", 0),
+        "ready_elapsed_s": ready_info.get("ready_elapsed_s", 0.0),
+        "warmup_after_t0": {
+            "requested_frame_sets": int(args.warmup_frames),
+            "accepted_frame_sets": warmup_accepted,
+            "dropped_frame_sets": warmup_dropped,
+        },
+        "cameras": manifest_cameras,
+        "record_stats": {
+            "accepted_frame_sets": accepted,
+            "dropped_frame_sets": dropped,
+            "status_interval_s": status_interval_s,
+            "timestamp_drift_ms": _summarize_values(drift_values_ms),
+            "last_timestamps_ns": last_timestamps_ns,
+        },
+    }
+    manifest_path = out_dir / "session.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    LOGGER.info(
+        "Recorded SDK bag session: %s accepted=%d dropped=%d drift_ms=%s",
+        manifest_path,
+        accepted,
+        dropped,
+        manifest["record_stats"]["timestamp_drift_ms"],
+    )
+    if accepted == 0:
+        if stop_reason == "keyboard_interrupt":
+            LOGGER.warning(
+                "Manual stop happened before any synchronized frame set was validated; replay may fail. "
+                "Inspect %s and the bag sizes before using it as a benchmark run.",
+                manifest_path,
+            )
+        else:
+            raise RuntimeError(f"Recording produced no synchronized frame sets; inspect {manifest_path}")
+    replay_command = _record_replay_command(config_path, out_dir)
+    LOGGER.info("Replay command:\n%s", replay_command)
 
 
 def cmd_calibrate(args: argparse.Namespace) -> None:
@@ -567,8 +1304,42 @@ def build_parser() -> argparse.ArgumentParser:
     calibrate.set_defaults(func=cmd_calibrate)
 
     record = sub.add_parser("record", help="Record synchronized RGB-D data")
-    record.add_argument("--duration", type=float, default=30.0)
+    record.add_argument("--config", default="configs/recon3d/default.yaml")
+    record.add_argument("--duration", "--duration-s", dest="duration", type=float, default=30.0)
     record.add_argument("--out", required=True)
+    record.add_argument("--cameras", nargs="*", default=None)
+    record.add_argument("--serials", nargs="*", default=None, help="Orbbec serials matching --cameras order.")
+    record.add_argument("--sync-modes", nargs="*", default=None, help="Sync modes matching --cameras order.")
+    record.add_argument("--align-mode", choices=["hw", "sw"], default=None, help="Depth-to-color alignment mode.")
+    record.add_argument("--color-size", nargs=2, type=int, default=None, metavar=("WIDTH", "HEIGHT"))
+    record.add_argument("--color-fps", type=int, default=None)
+    record.add_argument("--color-format", default=None)
+    record.add_argument("--color-auto-exposure", action=argparse.BooleanOptionalAction, default=None)
+    record.add_argument("--color-exposure", type=int, default=None)
+    record.add_argument("--color-gain", type=int, default=None)
+    record.add_argument("--no-sync-config", action="store_true", help="Do not write Orbbec multi-device sync config.")
+    record.add_argument("--no-compression", action="store_true", help="Disable SDK bag compression.")
+    record.add_argument("--warmup-frames", type=int, default=2, help="Synchronized frame sets to consume before stats.")
+    record.add_argument(
+        "--record-ready-timeout-s",
+        type=float,
+        default=60.0,
+        help="Seconds to wait for all cameras to produce one synchronized T0 before bag writing starts.",
+    )
+    record.add_argument(
+        "--record-ready-log-interval-s",
+        type=float,
+        default=2.0,
+        help="Seconds between progress logs while waiting for record-ready T0.",
+    )
+    record.add_argument(
+        "--record-status-interval-s",
+        type=float,
+        default=2.0,
+        help="Seconds between live recording status lines after bag writing starts.",
+    )
+    record.add_argument("--overwrite", action="store_true", help="Overwrite existing cam*.bag files in --out.")
+    _add_sync_diagnostics_args(record)
     record.set_defaults(func=cmd_record)
 
     run = sub.add_parser("run", help="Run real-time reconstruction from cameras")
@@ -597,8 +1368,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     replay = sub.add_parser("replay", help="Replay saved RGB-D data")
     replay.add_argument("--config", required=True)
-    replay.add_argument("--bag", required=True)
+    replay.add_argument("--bag", required=False, help="Legacy PNG replay dir, or SDK bag session dir/json.")
+    replay.add_argument("--bag-session", default=None, help="SDK bag session directory or session.json.")
+    replay.add_argument("--bags", nargs="*", default=None, help="SDK bag entries: cam0=path.bag cam1=path.bag ...")
     replay.add_argument("--out", required=False)
+    replay.add_argument("--align-mode", choices=["hw", "sw"], default=None, help="Depth-to-color alignment mode.")
+    replay.add_argument("--wait-timeout-ms", type=int, default=None, help="SDK playback frame wait timeout.")
+    replay.add_argument("--playback-rate", type=float, default=None, help="SDK playback rate; omit for recorded rate.")
+    replay.add_argument("--probe-frames", type=int, default=180, help="Frames per bag to probe before T0 crop.")
+    replay.add_argument("--max-frames", type=int, default=None, help="Optional limit for replay smoke tests.")
+    _add_sync_diagnostics_args(replay)
     _add_viewer_args(replay)
     replay.set_defaults(func=cmd_replay)
     return parser

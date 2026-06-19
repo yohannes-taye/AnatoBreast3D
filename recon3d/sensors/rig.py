@@ -94,6 +94,7 @@ class MultiFemtoBoltRig:
             else None
         )
         self._sync_diagnostics_round = 0
+        self._last_sync_event: dict[str, Any] | None = None
 
     def enable_sync_diagnostics(self, path: Path | str) -> None:
         """Enable JSONL diagnostics for subsequent synchronized reads."""
@@ -102,6 +103,11 @@ class MultiFemtoBoltRig:
     @property
     def sync_diagnostics_enabled(self) -> bool:
         return self._sync_diagnostics is not None
+
+    @property
+    def last_sync_event(self) -> dict[str, Any] | None:
+        """Most recent synchronized-read diagnostics event, if one was produced."""
+        return self._last_sync_event
 
     def start(self) -> None:
         """Start all cameras.
@@ -132,6 +138,10 @@ class MultiFemtoBoltRig:
             )
             if sync_camera is not None:
                 sync_camera.enable_multi_device_sync()
+            for camera in started:
+                resume_playback = getattr(camera, "resume_playback_stream", None)
+                if callable(resume_playback):
+                    resume_playback()
         except Exception:
             for camera in reversed(started):
                 try:
@@ -177,6 +187,7 @@ class MultiFemtoBoltRig:
         }
 
     def _write_sync_diagnostics(self, event: dict[str, Any]) -> None:
+        self._last_sync_event = event
         if self._sync_diagnostics is not None:
             self._sync_diagnostics.write(event)
 
