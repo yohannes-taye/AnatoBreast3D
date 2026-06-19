@@ -46,7 +46,10 @@ Medical-breast-segmentation-and-reconstruction/
 |-- tests/                      # unit, smoke, and single-view demo assets
 |-- tools/                      # command-line data, training, validation, inference, export tools
 |-- utils/                      # legacy helper code used by training/inference
+|-- viewer/                     # browser UI, Rerun iframe shell, active-learning frontend
 |-- work_dirs/                  # experiment checkpoints, best model, TensorBoard event files
+|-- start_recon3d_live.ps1      # root live startup: viewer server + live pipeline
+|-- start_recon3d_live.bat      # Windows convenience wrapper for the PowerShell startup
 |-- requirements.txt            # base software dependencies
 `-- requirements-hardware.txt   # optional Orbbec hardware dependencies
 ```
@@ -68,7 +71,9 @@ Medical-breast-segmentation-and-reconstruction/
 | `tests/` | Regression protection and demo assets. | `test_pipeline.py`, `test_backproject.py`, `test_fusion.py`, `test_nipple3d.py`, `test_sensors.py`, `singleview/`. | Synthetic tests cover 3D math, replay cameras, config loading, perception pipeline integration, and single-view image/video inference helpers. Hardware is not required for the current tests. |
 | `tools/` | Operational command-line scripts. | `train_breastseg.py`, `infer_demo.py`, `validate.py`, `convert_breast_labelme.py`, `prepare_data.py`, `regenerate_splits.py`, `export_onnx.py`, `model_summary.py`. | This is the user-facing control layer for preparing data, training, validating, visualising predictions, exporting models, and inspecting model size. |
 | `utils/` | Legacy helper utilities. | `utils.py`, `dataloader.py`, `utils_metrics.py`, `callbacks.py`. | Current multi-task training still uses helpers such as `seed_everything`, `cvtColor`, `resize_image`, and `preprocess_input`. |
+| `viewer/` | Browser visualization frontend. | `live.html`, `replay.html`, `active_learning.js`, `active_learning.css`. | `live.html` is the single live visualization page. It embeds the Rerun stream from `live_manifest.json` and hosts the active-learning UI. |
 | `work_dirs/` | Experiment output root. | `breastseg_b2/best.pth`, `epoch_*.pth`, `tensorboard/`. | Training checkpoints and TensorBoard event files live here. Perception loads the deployed copy at `checkpoint/breastseg.pth`. |
+| root startup scripts | Live process launcher. | `start_recon3d_live.ps1`, `start_recon3d_live.bat`. | Starts the viewer/API server and `tools/live_recon.py` from the project root. These scripts intentionally live outside `tools/` because they orchestrate both pipeline and visualization processes. |
 
 ## `configs/`
 
@@ -87,8 +92,9 @@ validation metric weighting.
 
 `configs/recon3d/default.yaml` is the RGB-D runtime config. It binds the 3D
 pipeline to the 2D perception checkpoint, extrinsics file, sync tolerance,
-fusion parameters, nipple 3D clustering/fusion parameters, output folder, and
-embedded viewer server settings.
+fusion parameters, nipple 3D clustering/fusion parameters, and output folder.
+The browser viewer is started separately by the root `start_recon3d_live.*`
+scripts and served from `viewer/live.html`.
 
 ## `data/`
 

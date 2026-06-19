@@ -358,17 +358,8 @@ class Recon3DConfig:
     nipple3d: Nipple3DConfig = field(default_factory=Nipple3DConfig)
     output_dir: Path | None = None
     sync_max_drift_ms: float = 5.0
-    enable_visualization: bool = False
-    viewer_host: str = "127.0.0.1"
-    viewer_port: int = 8765
-    viewer_open_browser: bool = False
 
     def __post_init__(self) -> None:
         if self.output_dir is not None:
             object.__setattr__(self, "output_dir", Path(self.output_dir))
         _validate_positive(self.sync_max_drift_ms, "sync_max_drift_ms")
-        if not self.viewer_host:
-            raise ValueError("viewer_host must be non-empty")
-        object.__setattr__(self, "viewer_port", int(self.viewer_port))
-        if not (0 < self.viewer_port < 65536):
-            raise ValueError("viewer_port must be in [1, 65535]")

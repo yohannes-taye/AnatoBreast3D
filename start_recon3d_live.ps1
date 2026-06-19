@@ -16,7 +16,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Root = Split-Path -Parent $PSScriptRoot
+$Root = $PSScriptRoot
 $OutPath = Join-Path $Root $Out
 $LogDir = Join-Path $OutPath "logs"
 $Stamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -118,7 +118,7 @@ $LiveRunnerText = @"
 `$ErrorActionPreference = 'Continue'
 Set-Location -LiteralPath $RootLiteral
 `$cmd = $LiveArgsLiteral
-Write-Host 'Starting Recon3D live capture/Rerun pipeline'
+Write-Host 'Starting Recon3D live reconstruction pipeline'
 Write-Host 'Log: $LiveLog'
 Write-Host ('conda ' + (`$cmd -join ' '))
 & conda @cmd 2>&1 | Tee-Object -FilePath $LiveLogLiteral

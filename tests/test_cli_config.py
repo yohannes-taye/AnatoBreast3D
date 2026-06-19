@@ -9,10 +9,6 @@ def test_load_recon_config_reads_full_nipple_config(tmp_path) -> None:
         """
 output_dir: runs/test
 extrinsics_path: configs/recon3d/extrinsics.json
-enable_visualization: true
-viewer_host: 0.0.0.0
-viewer_port: 8888
-viewer_open_browser: true
 nipple3d:
   dbscan_eps_m: 0.007
   min_cluster_points: 12
@@ -26,10 +22,6 @@ nipple3d:
     config, extrinsics_path = load_recon_config(config_path)
 
     assert str(extrinsics_path).replace("\\", "/") == "configs/recon3d/extrinsics.json"
-    assert config.enable_visualization is True
-    assert config.viewer_host == "0.0.0.0"
-    assert config.viewer_port == 8888
-    assert config.viewer_open_browser is True
     assert config.nipple3d.dbscan_eps_m == 0.007
     assert config.nipple3d.min_cluster_points == 12
     assert config.nipple3d.covariance_jitter_m2 == 2.0e-8

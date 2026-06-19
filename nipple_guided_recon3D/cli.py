@@ -99,7 +99,6 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
         ),
         output_dir=output_dir,
         sync_max_drift_ms=float(raw.get("sync_max_drift_ms", 5.0)),
-        enable_visualization=bool(raw.get("enable_visualization", False)),
     )
     extrinsics_path = Path(raw.get("extrinsics_path", "configs/recon3d/extrinsics.json"))
     return config, extrinsics_path

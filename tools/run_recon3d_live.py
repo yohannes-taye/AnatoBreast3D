@@ -49,15 +49,6 @@ def main() -> None:
         action="store_true",
         help="Do not write Orbbec multi-device sync settings before capture.",
     )
-    parser.add_argument(
-        "--visualize",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Start the embedded Recon3D browser viewer with the pipeline.",
-    )
-    parser.add_argument("--viewer-host", default=None, help="Viewer bind host.")
-    parser.add_argument("--viewer-port", type=int, default=None, help="Preferred viewer port.")
-    parser.add_argument("--open-viewer", action="store_true", help="Open the viewer URL in the default browser.")
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -77,14 +68,6 @@ def main() -> None:
         command.append("--once")
     if args.no_sync_config:
         command.append("--no-sync-config")
-    if args.visualize is not None:
-        command.append("--visualize" if args.visualize else "--no-visualize")
-    if args.viewer_host is not None:
-        command.extend(["--viewer-host", args.viewer_host])
-    if args.viewer_port is not None:
-        command.extend(["--viewer-port", str(args.viewer_port)])
-    if args.open_viewer:
-        command.append("--open-viewer")
 
     print("Running formal Recon3D pipeline:")
     print(" ".join(command))

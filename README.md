@@ -161,35 +161,32 @@ Notes:
 
 ## Live Operation
 
-The formal `Recon3DPipeline` starts the browser viewer automatically when
-`enable_visualization: true` is set in `configs/recon3d/default.yaml`:
+The browser dashboard is a separate viewer process. Use the root startup script
+when you want the live pipeline and the single visualization entry together:
+
+```powershell
+cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
+powershell -ExecutionPolicy Bypass -File .\start_recon3d_live.ps1 -OpenBrowser
+```
+
+The dashboard is served at:
+
+```text
+http://127.0.0.1:8765/viewer/live.html
+```
+
+The script opens one PowerShell window for the browser viewer/API server and one
+for realtime capture, segmentation, fusion, and Rerun streaming. Logs are written
+under `runs\recon3d_live\logs\`.
+
+For formal headless reconstruction without the browser dashboard, run the
+pipeline directly:
 
 ```powershell
 cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
 conda activate breastseg
 python -m recon3d.cli run --config configs\recon3d\default.yaml --out runs\recon3d_live
 ```
-
-The embedded viewer is served at:
-
-```text
-http://127.0.0.1:8765/viewer/live.html
-```
-
-Use `--open-viewer` to open the browser automatically, `--viewer-port` to choose
-a different port, or `--no-visualize` to keep the pipeline headless.
-
-For the Rerun-backed live iframe and Active Learning API, start both required
-long-running processes with one command:
-
-```powershell
-cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
-powershell -ExecutionPolicy Bypass -File tools\start_recon3d_live.ps1 -OpenBrowser
-```
-
-The script opens one PowerShell window for the browser viewer/API server and one
-for realtime capture, segmentation, fusion, and Rerun streaming. Logs are written
-under `runs\recon3d_live\logs\`.
 
 For manual debugging, start the same two processes in separate PowerShell or
 conda terminals.
@@ -218,9 +215,10 @@ http://127.0.0.1:8765/viewer/live.html
 ```
 
 The viewer server is responsible for the web page and Active Learning API. The
-camera pipeline is responsible for Orbbec capture and reconstruction. If the UI
-shows `server offline`, restart `tools\serve_recon3d_viewer.py`; that message
-does not necessarily mean the cameras stopped.
+camera pipeline is responsible for Orbbec capture, reconstruction, Rerun
+streaming, and `live_manifest.json`. If the UI shows `server offline`, restart
+`tools\serve_recon3d_viewer.py`; that message does not necessarily mean the
+cameras stopped.
 
 Manual live-view checks:
 

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-import atexit
 import json
 import logging
-from pathlib import Path
+import socket
 import threading
 import time
 from typing import Mapping
-from urllib.parse import quote
-import webbrowser
 
+import cv2
 import numpy as np
 import open3d as o3d
 
@@ -33,104 +31,48 @@ from recon3d.smoothing.temporal import OneEuroFilter3D
 
 
 LOGGER = logging.getLogger(__name__)
-_VIEWER_LOCK = threading.Lock()
-_VIEWER_SERVER: object | None = None
-_VIEWER_THREAD: threading.Thread | None = None
-_VIEWER_ROOT: Path | None = None
-_VIEWER_BASE_URL: str | None = None
-_VIEWER_ATEXIT_REGISTERED = False
 
 
 def _now_ms(start: float) -> float:
     return (time.perf_counter() - start) * 1000.0
 
 
-def _is_viewer_running() -> bool:
-    return _VIEWER_SERVER is not None and _VIEWER_THREAD is not None and _VIEWER_THREAD.is_alive()
+def _mask_bbox(mask: np.ndarray) -> list[int] | None:
+    ys, xs = np.where(mask)
+    if len(xs) == 0:
+        return None
+    return [int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max())]
 
 
-def _viewer_url_for_output(base_url: str, root: Path, output_dir: Path | None) -> str:
-    if output_dir is None:
-        return base_url
-    try:
-        rel = output_dir.resolve().relative_to(root.resolve())
-    except ValueError:
-        return base_url
-    base = f"../{rel.as_posix().rstrip('/')}/"
-    return f"{base_url}?base={quote(base, safe='')}"
+def _port_available(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("127.0.0.1", int(port)))
+        except OSError:
+            return False
+    return True
 
 
-def stop_viewer_server() -> None:
-    """Stop the embedded Recon3D viewer server if this process started it."""
-    global _VIEWER_BASE_URL, _VIEWER_ROOT, _VIEWER_SERVER, _VIEWER_THREAD
-    with _VIEWER_LOCK:
-        server = _VIEWER_SERVER
-        if server is None:
-            return
-        shutdown = getattr(server, "shutdown", None)
-        server_close = getattr(server, "server_close", None)
-        if callable(shutdown):
-            shutdown()
-        if callable(server_close):
-            server_close()
-        _VIEWER_SERVER = None
-        _VIEWER_THREAD = None
-        _VIEWER_ROOT = None
-        _VIEWER_BASE_URL = None
+def _choose_rerun_ports(web_port: int, grpc_port: int) -> tuple[int, int]:
+    for offset in range(20):
+        candidate_web = int(web_port) + offset
+        candidate_grpc = int(grpc_port) + offset
+        if _port_available(candidate_web) and _port_available(candidate_grpc):
+            return candidate_web, candidate_grpc
+    raise OSError(f"No free rerun port pair found from {web_port}/{grpc_port}")
 
 
-def start_viewer_server(
-    *,
-    host: str = "127.0.0.1",
-    port: int = 8765,
-    output_dir: Path | None = None,
-    open_browser: bool = False,
-) -> str:
-    """Start the browser viewer/API server in a background thread.
-
-    Input shape/unit/frame: host/port are HTTP bind settings; output_dir is the
-    reconstruction output folder to load in the viewer when it is under the
-    project root.
-    Return type: viewer URL string.
-    """
-    global _VIEWER_ATEXIT_REGISTERED, _VIEWER_BASE_URL, _VIEWER_ROOT, _VIEWER_SERVER, _VIEWER_THREAD
-    with _VIEWER_LOCK:
-        if _is_viewer_running() and _VIEWER_BASE_URL is not None and _VIEWER_ROOT is not None:
-            url = _viewer_url_for_output(_VIEWER_BASE_URL, _VIEWER_ROOT, output_dir)
-            if open_browser:
-                webbrowser.open(url)
-            return url
-
-        from tools.serve_recon3d_viewer import ROOT, make_server
-
-        server = None
-        chosen_port = port
-        for candidate_port in range(port, port + 20):
-            try:
-                server = make_server(host, candidate_port, ROOT)
-                chosen_port = candidate_port
-                break
-            except OSError:
-                continue
-        if server is None:
-            raise RuntimeError(f"No free viewer port found from {port} to {port + 19}")
-
-        thread = threading.Thread(target=server.serve_forever, name="recon3d-viewer-server", daemon=True)
-        thread.start()
-        _VIEWER_SERVER = server
-        _VIEWER_THREAD = thread
-        _VIEWER_ROOT = ROOT
-        browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
-        _VIEWER_BASE_URL = f"http://{browser_host}:{chosen_port}/viewer/index.html"
-        if not _VIEWER_ATEXIT_REGISTERED:
-            atexit.register(stop_viewer_server)
-            _VIEWER_ATEXIT_REGISTERED = True
-
-        url = _viewer_url_for_output(_VIEWER_BASE_URL, ROOT, output_dir)
-        LOGGER.info("Recon3D viewer server started at %s", url)
-        if open_browser:
-            webbrowser.open(url)
-        return url
+def _build_rerun_blueprint(rrb, cam_ids: list[str]):
+    rgb_views = [rrb.Spatial2DView(origin=f"cams/{cam_id}", name=f"{cam_id} rgb") for cam_id in cam_ids]
+    depth_views = [rrb.Spatial2DView(origin=f"depth/{cam_id}", name=f"{cam_id} depth") for cam_id in cam_ids]
+    return rrb.Blueprint(
+        rrb.Vertical(
+            rrb.Spatial3DView(origin="world", name="Fused 3D"),
+            rrb.Grid(contents=rgb_views + depth_views, grid_columns=max(1, len(cam_ids))),
+            row_shares=[2.0, 1.4],
+        ),
+        collapse_panels=True,
+    )
 
 
 class Recon3DPipeline:
@@ -144,6 +86,11 @@ class Recon3DPipeline:
         rig: MultiFemtoBoltRig | None = None,
         perception: BreastPerceptionAdapter | None = None,
         fusion_backend: FusionBackend | None = None,
+        visualize: bool = False,
+        rerun_web_port: int = 9090,
+        rerun_grpc_port: int = 9876,
+        rerun_memory: str = "25%",
+        viewer_rgb_width: int = 640,
     ) -> None:
         """Create the reconstruction pipeline.
 
@@ -157,17 +104,16 @@ class Recon3DPipeline:
         self.perception = perception or BreastPerceptionAdapter(config=config)
         self.fusion_backend = fusion_backend or PointCloudFusionBackend(config.fusion)
         self._filters = {"left": OneEuroFilter3D(), "right": OneEuroFilter3D()}
-        self.viewer_url: str | None = None
-        if self.config.enable_visualization:
-            try:
-                self.viewer_url = start_viewer_server(
-                    host=self.config.viewer_host,
-                    port=self.config.viewer_port,
-                    output_dir=self.config.output_dir,
-                    open_browser=self.config.viewer_open_browser,
-                )
-            except Exception as exc:  # noqa: BLE001 - visualization should not stop reconstruction
-                LOGGER.warning("Recon3D viewer server could not start: %s", exc)
+        self.visualize = bool(visualize)
+        self.rerun_web_port = int(rerun_web_port)
+        self.rerun_grpc_port = int(rerun_grpc_port)
+        self.rerun_memory = str(rerun_memory)
+        self.viewer_rgb_width = int(viewer_rgb_width)
+        self._frame_index = 0
+        self._rr = None
+        self._rerun_url: str | None = None
+        self._rerun_error: str | None = None
+        self._rerun_started = False
 
     def _validate_frames(self, frames: Mapping[str, RGBDFrame]) -> int:
         if not frames:
@@ -227,6 +173,181 @@ class Recon3DPipeline:
         }
         (out_dir / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
+    def _ensure_rerun_stream(self, cam_ids: list[str]) -> None:
+        if self._rerun_started or not self.visualize:
+            return
+        self._rerun_started = True
+        try:
+            import rerun as rr
+            import rerun.blueprint as rrb
+
+            web_port, grpc_port = _choose_rerun_ports(self.rerun_web_port, self.rerun_grpc_port)
+            rr.init("breast_recon3d")
+            blueprint = _build_rerun_blueprint(rrb, cam_ids)
+
+            def serve_rerun() -> None:
+                try:
+                    rr.serve_web(
+                        open_browser=False,
+                        web_port=web_port,
+                        grpc_port=grpc_port,
+                        default_blueprint=blueprint,
+                        server_memory_limit=self.rerun_memory,
+                    )
+                except Exception as exc:  # noqa: BLE001 - reported through manifest/logs
+                    self._rerun_error = f"{type(exc).__name__}: {exc}"
+                    LOGGER.warning("Recon3D rerun server stopped: %s", self._rerun_error)
+
+            threading.Thread(
+                target=serve_rerun,
+                name="recon3d-rerun-server",
+                daemon=True,
+            ).start()
+            time.sleep(0.2)
+            if self._rerun_error:
+                raise RuntimeError(self._rerun_error)
+            self._rr = rr
+            self._rerun_url = (
+                f"http://localhost:{web_port}"
+                f"?url=rerun%2Bhttp://localhost:{grpc_port}/proxy"
+            )
+            LOGGER.info("Recon3D rerun stream started at %s", self._rerun_url)
+        except Exception as exc:  # noqa: BLE001 - visualization must not break reconstruction
+            self._rr = None
+            self._rerun_error = f"{type(exc).__name__}: {exc}"
+            LOGGER.warning("Recon3D rerun stream disabled: %s", self._rerun_error)
+
+    def _publish_rerun_frame(
+        self,
+        frames: Mapping[str, RGBDFrame],
+        perceptions: Mapping[str, object],
+        result: ReconstructionResult,
+        frame_wall_s: float,
+    ) -> None:
+        rr = self._rr
+        if rr is None:
+            return
+        rr.set_time("frame", sequence=self._frame_index)
+        rr.set_time("time", timestamp=frame_wall_s)
+        for cam_id, frame in sorted(frames.items()):
+            perception = perceptions.get(cam_id)
+            rr.log(f"cams/{cam_id}/image", rr.Image(frame.rgb))
+            rr.log(
+                f"depth/{cam_id}",
+                rr.DepthImage(
+                    frame.depth_mm,
+                    meter=frame.depth_config.depth_scale_m,
+                    colormap="turbo",
+                    depth_range=[frame.depth_config.min_depth_m, frame.depth_config.max_depth_m],
+                ),
+            )
+            if perception is None:
+                continue
+            rr.log(f"cams/{cam_id}/seg", rr.SegmentationImage(perception.breast_mask.astype(np.uint8), opacity=0.5))
+            boxes = np.asarray(perception.nipple_boxes_xyxy, dtype=np.float32)
+            if len(boxes):
+                labels = [f"nipple {float(score):.2f}" for score in perception.nipple_scores]
+                rr.log(
+                    f"cams/{cam_id}/nipple",
+                    rr.Boxes2D(
+                        mins=boxes[:, :2],
+                        sizes=boxes[:, 2:] - boxes[:, :2],
+                        colors=[(255, 64, 64)] * len(boxes),
+                        labels=labels,
+                    ),
+                )
+            else:
+                rr.log(
+                    f"cams/{cam_id}/nipple",
+                    rr.Boxes2D(mins=np.zeros((0, 2), dtype=np.float32), sizes=np.zeros((0, 2), dtype=np.float32)),
+                )
+
+        points = np.asarray(result.fused_cloud.points)
+        colors = np.asarray(result.fused_cloud.colors)
+        kwargs = {"radii": 0.0015}
+        if len(points) and len(colors) == len(points):
+            kwargs["colors"] = (np.clip(colors, 0.0, 1.0) * 255).astype(np.uint8)
+        rr.log("world/breast", rr.Points3D(points, **kwargs))
+        for name, value in result.timings_ms.items():
+            rr.log(f"timing/{name}", rr.Scalars(float(value)))
+
+    def _publish_viewer_frame(
+        self,
+        frames: Mapping[str, RGBDFrame],
+        perceptions: Mapping[str, object],
+        result: ReconstructionResult,
+        frame_wall_s: float,
+    ) -> None:
+        out_dir = self.config.output_dir
+        if out_dir is None or not self.visualize:
+            return
+        live_dir = out_dir / "live"
+        live_dir.mkdir(parents=True, exist_ok=True)
+        cam_ids = sorted(frames)
+        self._ensure_rerun_stream(cam_ids)
+
+        display: dict[str, dict[str, int]] = {}
+        perception_payload: dict[str, dict[str, object]] = {}
+        rgb_paths: dict[str, str] = {}
+        mask_paths: dict[str, str] = {}
+        target_width = max(1, int(self.viewer_rgb_width))
+        for cam_id, frame in sorted(frames.items()):
+            scale = target_width / float(frame.rgb.shape[1])
+            target_height = max(1, int(round(frame.rgb.shape[0] * scale)))
+            bgr = cv2.cvtColor(frame.rgb, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(
+                str(live_dir / f"{cam_id}_rgb.jpg"),
+                cv2.resize(bgr, (target_width, target_height), interpolation=cv2.INTER_AREA),
+                [cv2.IMWRITE_JPEG_QUALITY, 80],
+            )
+            rgb_paths[cam_id] = f"live/{cam_id}_rgb.jpg"
+            display[cam_id] = {
+                "width": target_width,
+                "height": target_height,
+                "source_width": int(frame.rgb.shape[1]),
+                "source_height": int(frame.rgb.shape[0]),
+            }
+            perception = perceptions.get(cam_id)
+            if perception is None:
+                continue
+            mask = perception.breast_mask.astype(np.uint8)
+            cv2.imwrite(
+                str(live_dir / f"{cam_id}_mask.png"),
+                cv2.resize(mask * 255, (target_width, target_height), interpolation=cv2.INTER_NEAREST),
+            )
+            mask_paths[cam_id] = f"live/{cam_id}_mask.png"
+            perception_payload[cam_id] = {
+                "mask_pixels": int(mask.sum()),
+                "mask_bbox_xyxy": _mask_bbox(mask.astype(bool)),
+                "nipple_boxes_xyxy": np.asarray(perception.nipple_boxes_xyxy, dtype=float).tolist(),
+                "nipple_scores": np.asarray(perception.nipple_scores, dtype=float).tolist(),
+            }
+
+        try:
+            self._publish_rerun_frame(frames, perceptions, result, frame_wall_s)
+        except Exception as exc:  # noqa: BLE001 - keep static viewer assets usable
+            self._rerun_error = f"{type(exc).__name__}: {exc}"
+            LOGGER.warning("Recon3D rerun frame publish failed: %s", self._rerun_error)
+
+        total_ms = float(result.timings_ms.get("total_ms") or 0.0)
+        manifest = {
+            "timestamp": frame_wall_s,
+            "frame": self._frame_index,
+            "points": int(len(result.fused_cloud.points)),
+            "fps": round(1000.0 / total_ms, 2) if total_ms > 0 else 0,
+            "cameras": cam_ids,
+            "rerun_url": self._rerun_url,
+            "rgb": rgb_paths,
+            "mask": mask_paths,
+            "display": display,
+            "perception": perception_payload,
+            "timings_ms": result.timings_ms,
+        }
+        if self._rerun_error:
+            manifest["rerun_error"] = self._rerun_error
+        (out_dir / "live_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        self._frame_index += 1
+
     def run_once(self, frames: Mapping[str, RGBDFrame]) -> ReconstructionResult:
         """Run one synchronized RGB-D frame set through reconstruction.
 
@@ -234,6 +355,7 @@ class Recon3DPipeline:
         millimetres; output cloud/nipples are world-frame metres.
         Return type: ``ReconstructionResult``.
         """
+        frame_wall_s = time.time()
         total_start = time.perf_counter()
         timings: dict[str, float] = {}
         timestamp_ns = self._validate_frames(frames)
@@ -289,6 +411,7 @@ class Recon3DPipeline:
             timings_ms=timings,
         )
         self._write_summary(result)
+        self._publish_viewer_frame(frames, perceptions, result, frame_wall_s)
         LOGGER.info(
             "Recon3D frame complete: total=%.2f ms perception=%.2f ms points=%d",
             timings["total_ms"],

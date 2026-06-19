@@ -399,10 +399,8 @@ class Recon3DConfig:
     nipple_guided_fusion: NippleGuidedFusionConfig = field(default_factory=NippleGuidedFusionConfig)
     output_dir: Path | None = None
     sync_max_drift_ms: float = 50
-    enable_visualization: bool = False
 
     def __post_init__(self) -> None:
         if self.output_dir is not None:
             object.__setattr__(self, "output_dir", Path(self.output_dir))
         _validate_positive(self.sync_max_drift_ms, "sync_max_drift_ms")
-

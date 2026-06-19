@@ -44,9 +44,6 @@ Important fields:
 
 ```yaml
 extrinsics_path: configs/recon3d/extrinsics.json
-enable_visualization: true
-viewer_host: 127.0.0.1
-viewer_port: 8765
 perception:
   model_config_path: configs/breastseg/breastseg_b2_inplace.py
   checkpoint_path: checkpoint/breastseg.pth
@@ -103,6 +100,16 @@ the preferred first test path for debugging model, geometry, and IO behavior.
 
 ## 6. Real-Time Run
 
+Use the root startup script for the normal live workflow. It starts the viewer
+server and the live reconstruction pipeline in separate PowerShell windows, and
+`viewer/live.html` embeds the Rerun stream as the only visualization page.
+
+```powershell
+.\start_recon3d_live.ps1 -OpenBrowser
+```
+
+For formal headless reconstruction, run the pipeline directly:
+
 ```bash
 python -m recon3d.cli run \
   --config configs/recon3d/default.yaml \
@@ -110,9 +117,8 @@ python -m recon3d.cli run \
   --cameras cam0 cam1 cam2
 ```
 
-With the default config, the pipeline starts the embedded browser viewer at
-`http://127.0.0.1:8765/viewer/live.html`. Use `--open-viewer` to open it
-automatically, or `--no-visualize` for a headless run.
+The browser dashboard is served separately at
+`http://127.0.0.1:8765/viewer/live.html`.
 
 Expected hardware mode:
 

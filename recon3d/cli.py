@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 from bisect import bisect_left
-from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import logging
@@ -55,23 +54,6 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
     perception_raw = raw.get("perception", {})
     fusion_raw = raw.get("fusion", {})
     nipple_raw = raw.get("nipple3d", {})
-    viewer_raw = raw.get("viewer", {})
-    if viewer_raw is None:
-        viewer_raw = {}
-    if not isinstance(viewer_raw, dict):
-        raise ValueError("viewer config must be a mapping")
-    viewer_enabled = raw.get("enable_visualization")
-    if viewer_enabled is None:
-        viewer_enabled = viewer_raw.get("enabled", False)
-    viewer_host = raw.get("viewer_host")
-    if viewer_host is None:
-        viewer_host = viewer_raw.get("host", "127.0.0.1")
-    viewer_port = raw.get("viewer_port")
-    if viewer_port is None:
-        viewer_port = viewer_raw.get("port", 8765)
-    viewer_open_browser = raw.get("viewer_open_browser")
-    if viewer_open_browser is None:
-        viewer_open_browser = viewer_raw.get("open_browser", False)
     output_dir = output_override or (Path(raw["output_dir"]) if raw.get("output_dir") else None)
     config = Recon3DConfig(
         perception=PerceptionConfig(
@@ -99,30 +81,9 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
         ),
         output_dir=output_dir,
         sync_max_drift_ms=float(raw.get("sync_max_drift_ms", 5.0)),
-        enable_visualization=bool(viewer_enabled),
-        viewer_host=str(viewer_host),
-        viewer_port=int(viewer_port),
-        viewer_open_browser=bool(viewer_open_browser),
     )
     extrinsics_path = Path(raw.get("extrinsics_path", "configs/recon3d/extrinsics.json"))
     return config, extrinsics_path
-
-
-def _apply_viewer_overrides(config: Recon3DConfig, args: argparse.Namespace) -> Recon3DConfig:
-    updates: dict[str, Any] = {}
-    visualize = getattr(args, "visualize", None)
-    if visualize is not None:
-        updates["enable_visualization"] = bool(visualize)
-    viewer_host = getattr(args, "viewer_host", None)
-    if viewer_host is not None:
-        updates["viewer_host"] = str(viewer_host)
-    viewer_port = getattr(args, "viewer_port", None)
-    if viewer_port is not None:
-        updates["viewer_port"] = int(viewer_port)
-    if getattr(args, "open_viewer", False):
-        updates["viewer_open_browser"] = True
-        updates.setdefault("enable_visualization", True)
-    return replace(config, **updates) if updates else config
 
 
 def _build_replay_rig(bag: Path, max_drift_ms: float) -> MultiFemtoBoltRig:
@@ -346,7 +307,6 @@ def _record_replay_command(config_path: Path, bag_session: Path) -> str:
         bag_session,
         "--out",
         replay_out,
-        "--no-visualize",
         "--sync-diagnostics",
         "--probe-frames",
         "180",
@@ -817,7 +777,6 @@ def cmd_replay(args: argparse.Namespace) -> None:
     if not isinstance(hardware_raw, dict):
         raise ValueError("hardware config must be a mapping")
     config, extrinsics_path = load_recon_config(config_path, Path(args.out) if args.out else None)
-    config = _apply_viewer_overrides(config, args)
     extrinsics = load_extrinsics(extrinsics_path)
     bag_session = Path(args.bag_session) if args.bag_session else None
     explicit_bags = _parse_bag_entries(args.bags)
@@ -863,7 +822,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
     else:
         raise ValueError("No replay source resolved")
 
-    pipeline = Recon3DPipeline(config, extrinsics, rig=rig)
+    pipeline = Recon3DPipeline(config, extrinsics, rig=rig, **_pipeline_visualization_kwargs(args))
     max_frames = getattr(args, "max_frames", None)
     if max_frames is None:
         pipeline.run_stream()
@@ -896,7 +855,6 @@ def cmd_run(args: argparse.Namespace) -> None:
     config_path = Path(args.config)
     raw_config = _load_yaml_or_json(config_path)
     config, extrinsics_path = load_recon_config(config_path, Path(args.out) if args.out else None)
-    config = _apply_viewer_overrides(config, args)
     camera_specs = _hardware_camera_specs(args, raw_config)
     if args.identity_extrinsics:
         if len(camera_specs) != 1:
@@ -917,7 +875,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         max_timestamp_drift_ms=config.sync_max_drift_ms,
         sync_diagnostics_path=_sync_diagnostics_path(args, config.output_dir),
     )
-    pipeline = Recon3DPipeline(config, extrinsics, rig=rig)
+    pipeline = Recon3DPipeline(config, extrinsics, rig=rig, **_pipeline_visualization_kwargs(args))
     if args.once:
         rig.start()
         try:
@@ -1298,18 +1256,6 @@ def cmd_calibrate(args: argparse.Namespace) -> None:
     LOGGER.info("Saved calibration report: %s", report_path)
 
 
-def _add_viewer_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--visualize",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Start the embedded Recon3D browser viewer with the pipeline.",
-    )
-    parser.add_argument("--viewer-host", default=None, help="Viewer bind host.")
-    parser.add_argument("--viewer-port", type=int, default=None, help="Preferred viewer port.")
-    parser.add_argument("--open-viewer", action="store_true", help="Open the viewer URL in the default browser.")
-
-
 def _add_sync_diagnostics_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sync-diagnostics",
@@ -1321,6 +1267,28 @@ def _add_sync_diagnostics_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="JSONL path for --sync-diagnostics; defaults to <out>/sync_diagnostics.jsonl.",
     )
+
+
+def _add_visualization_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Publish live_manifest.json and a rerun stream for viewer/live.html.",
+    )
+    parser.add_argument("--rerun-web-port", type=int, default=9090, help="Port hosting rerun web assets.")
+    parser.add_argument("--rerun-grpc-port", type=int, default=9876, help="Port hosting rerun data.")
+    parser.add_argument("--rerun-mem", default="25%", help="rerun server memory budget.")
+    parser.add_argument("--viewer-rgb-width", type=int, default=640, help="Width of RGB/mask preview images.")
+
+
+def _pipeline_visualization_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "visualize": bool(getattr(args, "visualize", False)),
+        "rerun_web_port": int(getattr(args, "rerun_web_port", 9090)),
+        "rerun_grpc_port": int(getattr(args, "rerun_grpc_port", 9876)),
+        "rerun_memory": str(getattr(args, "rerun_mem", "25%")),
+        "viewer_rgb_width": int(getattr(args, "viewer_rgb_width", 640)),
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1427,7 +1395,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use identity extrinsics for a single-camera diagnostic run only.",
     )
     _add_sync_diagnostics_args(run)
-    _add_viewer_args(run)
+    _add_visualization_args(run)
     run.set_defaults(func=cmd_run)
 
     replay = sub.add_parser("replay", help="Replay saved RGB-D data")
@@ -1442,7 +1410,7 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--probe-frames", type=int, default=180, help="Frames per bag to probe before T0 crop.")
     replay.add_argument("--max-frames", type=int, default=None, help="Optional limit for replay smoke tests.")
     _add_sync_diagnostics_args(replay)
-    _add_viewer_args(replay)
+    _add_visualization_args(replay)
     replay.set_defaults(func=cmd_replay)
     return parser
 
