@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
@@ -239,6 +240,11 @@ def _sync_event_brief(rig: MultiFemtoBoltRig) -> str:
     return " ".join(parts)
 
 
+def _print_record_status(message: str, *args: Any) -> None:
+    text = message % args if args else message
+    print(f"[record] {text}", flush=True)
+
+
 def _wait_for_record_ready_t0(
     rig: MultiFemtoBoltRig,
     *,
@@ -256,7 +262,7 @@ def _wait_for_record_ready_t0(
     attempts = 0
     dropped = 0
     last_error = ""
-    LOGGER.info(
+    _print_record_status(
         "Record status: phase=ready elapsed=0.0s/%.1fs attempts=0 dropped=0 "
         "bag_writing=not_started",
         timeout_s,
@@ -277,7 +283,7 @@ def _wait_for_record_ready_t0(
                     "hardware sync cabling/modes, and camera stream readiness."
                 ) from exc
             if now >= next_log:
-                LOGGER.info(
+                _print_record_status(
                     "Record status: phase=ready elapsed=%.1fs/%.1fs attempts=%d dropped=%d "
                     "bag_writing=not_started last_error=%s sync=%s",
                     now - start,
@@ -294,7 +300,7 @@ def _wait_for_record_ready_t0(
 
         timestamps, drift_ms, t0_ns = _frame_timestamp_stats(frames)
         elapsed_s = time.perf_counter() - start
-        LOGGER.info(
+        _print_record_status(
             "Record status: phase=ready complete=true elapsed=%.2fs attempts=%d dropped=%d "
             "t0_ns=%d drift=%.3fms timestamps=%s",
             elapsed_s,
@@ -401,7 +407,7 @@ def _log_recording_status(
     accepted_fps = accepted / elapsed_s if elapsed_s > 0 else 0.0
     accept_rate = (accepted / total * 100.0) if total > 0 else 0.0
     last_error_text = f" last_error={last_error[:180]}" if last_error else ""
-    LOGGER.info(
+    _print_record_status(
         "Record status: phase=%s elapsed=%.1fs/%.1fs remaining=%.1fs "
         "accepted=%d dropped=%d accepted_fps=%.2f accept_rate=%.1f%% drift=(%s) bags=(%s)%s",
         phase,
@@ -491,31 +497,69 @@ def _probe_orbbec_bag_timestamps(
         cam_id: int(values[0]["device_timestamp_ns"])
         for cam_id, values in samples.items()
     }
-    t0_ns = max(first_timestamps.values())
-    first_after_t0: dict[str, int] = {}
-    first_after_sources: dict[str, str] = {}
-    for cam_id, values in samples.items():
-        chosen = next(
-            (value for value in values if int(value["device_timestamp_ns"]) >= t0_ns),
-            None,
-        )
-        if chosen is None:
-            raise RuntimeError(
-                f"Probe did not include a frame at/after common T0 for {cam_id}; "
-                f"increase --probe-frames (current {probe_frames})"
-            )
-        first_after_t0[cam_id] = int(chosen["device_timestamp_ns"])
-        first_after_sources[cam_id] = str(chosen.get("timestamp_source"))
+    t0_floor_ns = max(first_timestamps.values())
+    timestamps_by_cam = {
+        cam_id: [int(value["device_timestamp_ns"]) for value in values]
+        for cam_id, values in samples.items()
+    }
+    candidate_targets = sorted(
+        {
+            timestamp_ns
+            for values in timestamps_by_cam.values()
+            for timestamp_ns in values
+            if timestamp_ns >= t0_floor_ns
+        }
+    )
+    best_target_ns: int | None = None
+    best_after_t0: dict[str, int] | None = None
+    best_after_sources: dict[str, str] | None = None
+    best_drift_ms: float | None = None
+    for target_ns in candidate_targets:
+        candidate_after: dict[str, int] = {}
+        candidate_sources: dict[str, str] = {}
+        complete = True
+        for cam_id, timestamps in timestamps_by_cam.items():
+            index = bisect_left(timestamps, target_ns)
+            if index >= len(timestamps):
+                complete = False
+                break
+            candidate_after[cam_id] = timestamps[index]
+            candidate_sources[cam_id] = str(samples[cam_id][index].get("timestamp_source"))
+        if not complete:
+            continue
+        candidate_drift_ms = (max(candidate_after.values()) - min(candidate_after.values())) / 1_000_000.0
+        if best_drift_ms is None or candidate_drift_ms < best_drift_ms:
+            best_target_ns = target_ns
+            best_after_t0 = candidate_after
+            best_after_sources = candidate_sources
+            best_drift_ms = candidate_drift_ms
+        if candidate_drift_ms <= max_drift_ms:
+            best_target_ns = target_ns
+            best_after_t0 = candidate_after
+            best_after_sources = candidate_sources
+            best_drift_ms = candidate_drift_ms
+            break
 
-    drift_ms = (max(first_after_t0.values()) - min(first_after_t0.values())) / 1_000_000.0
+    if best_target_ns is None or best_after_t0 is None or best_after_sources is None or best_drift_ms is None:
+        raise RuntimeError(
+            f"Probe did not include a complete common replay window; "
+            f"increase --probe-frames (current {probe_frames})"
+        )
+
+    t0_ns = best_target_ns
+    first_after_t0 = best_after_t0
+    first_after_sources = best_after_sources
+    drift_ms = best_drift_ms
     if drift_ms > max_drift_ms:
         raise RuntimeError(
-            f"Common-T0 bag timestamp drift {drift_ms:.3f} ms exceeds limit {max_drift_ms:.3f} ms"
+            f"Best common-T0 bag timestamp drift {drift_ms:.3f} ms exceeds limit {max_drift_ms:.3f} ms "
+            f"within --probe-frames={probe_frames}; increase --probe-frames or inspect hardware sync"
         )
 
     summary = {
         "probe_frames": probe_frames,
         "first_timestamps_ns": first_timestamps,
+        "t0_floor_ns": t0_floor_ns,
         "t0_ns": t0_ns,
         "first_after_t0_ns": first_after_t0,
         "first_after_t0_sources": first_after_sources,
@@ -908,8 +952,11 @@ def cmd_record(args: argparse.Namespace) -> None:
         raise ValueError("--record-ready-log-interval-s must be positive")
     if float(args.record_status_interval_s) <= 0:
         raise ValueError("--record-status-interval-s must be positive")
+    if float(args.record_sync_max_drift_ms) <= 0:
+        raise ValueError("--record-sync-max-drift-ms must be positive")
     duration_s = float(args.duration)
     status_interval_s = float(args.record_status_interval_s)
+    record_sync_max_drift_ms = float(args.record_sync_max_drift_ms)
 
     cameras: list[FemtoBoltCamera] = []
     manifest_cameras: list[dict[str, Any]] = []
@@ -939,7 +986,7 @@ def cmd_record(args: argparse.Namespace) -> None:
 
     rig = MultiFemtoBoltRig(
         cameras,
-        max_timestamp_drift_ms=config.sync_max_drift_ms,
+        max_timestamp_drift_ms=record_sync_max_drift_ms,
         sync_diagnostics_path=_sync_diagnostics_path(args, out_dir),
     )
     accepted = 0
@@ -955,6 +1002,12 @@ def cmd_record(args: argparse.Namespace) -> None:
     stop_reason = "duration_complete"
     last_recording_error = ""
     LOGGER.info("Starting SDK bag recording stream: cameras=%s out=%s", [cam.cam_id for cam in cameras], out_dir)
+    _print_record_status(
+        "Live status is printed to stdout. record_sync_max_drift_ms=%.3f pipeline_sync_max_drift_ms=%.3f. "
+        "If using `conda run`, add `--no-capture-output` or `--live-stream` before `-n breastseg`.",
+        record_sync_max_drift_ms,
+        config.sync_max_drift_ms,
+    )
     rig.start()
     try:
         ready_info = _wait_for_record_ready_t0(
@@ -1088,6 +1141,8 @@ def cmd_record(args: argparse.Namespace) -> None:
         "pyorbbecsdk_version": _orbbec_sdk_version(),
         "config": str(config_path),
         "sync_max_drift_ms": config.sync_max_drift_ms,
+        "pipeline_sync_max_drift_ms": config.sync_max_drift_ms,
+        "record_sync_max_drift_ms": record_sync_max_drift_ms,
         "record_compression": not bool(args.no_compression),
         "record_started_after_t0": True,
         "ready_t0_ns": ready_info.get("ready_t0_ns"),
@@ -1337,6 +1392,15 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=2.0,
         help="Seconds between live recording status lines after bag writing starts.",
+    )
+    record.add_argument(
+        "--record-sync-max-drift-ms",
+        type=float,
+        default=1000.0,
+        help=(
+            "Loose drift limit used only by record-side ready/status monitoring. "
+            "Replay/pipeline still uses sync_max_drift_ms from config."
+        ),
     )
     record.add_argument("--overwrite", action="store_true", help="Overwrite existing cam*.bag files in --out.")
     _add_sync_diagnostics_args(record)
