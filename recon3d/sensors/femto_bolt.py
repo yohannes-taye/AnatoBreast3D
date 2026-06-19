@@ -447,27 +447,41 @@ class FemtoBoltCamera:
         self.flush_frames()
         return self.frameset_to_rgbd(self.grab_next_frameset())
 
-    def frameset_to_rgbd(self, frames) -> RGBDFrame:
+    def frameset_device_timestamp_ns(self, frames) -> int:
+        """Hardware (device) timestamp of a raw frame set, in nanoseconds.
+
+        Input shape/unit/frame: ``frames`` is a raw SDK frame set.
+        Return type: ``int`` nanoseconds (0 if unavailable).
+
+        Read this from the RAW frame set, before alignment. The ``AlignFilter``
+        output frame instead carries a host/global timestamp stamped when each
+        camera's frame is processed, which is staggered by per-camera processing
+        order and would desync the multi-camera rig by whole frame periods. The raw
+        device timestamp is identical across hardware-synced cameras for the same
+        trigger. The rig also captures this for every camera *before* decoding any
+        of them, because materialising one camera's frame can recycle the SDK
+        buffers still referenced by the others.
+        """
+        color = frames.get_color_frame()
+        depth = frames.get_depth_frame()
+        timestamp_us = int(color.get_timestamp_us()) if color is not None else 0
+        if timestamp_us <= 0 and depth is not None and hasattr(depth, "get_timestamp_us"):
+            timestamp_us = int(depth.get_timestamp_us())
+        if timestamp_us <= 0 and color is not None and hasattr(color, "get_system_timestamp_us"):
+            timestamp_us = int(color.get_system_timestamp_us())
+        return max(timestamp_us * 1000, 0)
+
+    def frameset_to_rgbd(self, frames, timestamp_ns: int | None = None) -> RGBDFrame:
         """Align and decode a raw frame set into an ``RGBDFrame``.
 
         Input shape/unit/frame: ``frames`` is a raw SDK frame set from
-        ``grab_next_frameset``; output RGB is HxWx3 uint8 and depth HxW raw units
-        on the same (color) grid.
+        ``grab_next_frameset``; ``timestamp_ns`` optionally overrides the device
+        timestamp (the rig captures it at grab time so it survives buffer reuse).
+        Output RGB is HxWx3 uint8 and depth HxW raw units on the same (color) grid.
         Return type: ``RGBDFrame``.
         """
-        # Read the hardware (device) timestamp from the RAW frame set, before
-        # alignment. The AlignFilter output frame instead carries a host/global
-        # timestamp stamped when each camera's frame is processed, which is staggered
-        # by per-camera processing order and would desync the multi-camera rig by
-        # whole frame periods. The raw device timestamp is identical across
-        # hardware-synced cameras for the same trigger.
-        raw_color = frames.get_color_frame()
-        raw_depth = frames.get_depth_frame()
-        timestamp_us = int(raw_color.get_timestamp_us()) if raw_color is not None else 0
-        if timestamp_us <= 0 and raw_depth is not None and hasattr(raw_depth, "get_timestamp_us"):
-            timestamp_us = int(raw_depth.get_timestamp_us())
-        if timestamp_us <= 0 and raw_color is not None and hasattr(raw_color, "get_system_timestamp_us"):
-            timestamp_us = int(raw_color.get_system_timestamp_us())
+        if timestamp_ns is None:
+            timestamp_ns = self.frameset_device_timestamp_ns(frames)
 
         if self._align is not None:
             frames = self._align.process(frames)
@@ -500,7 +514,6 @@ class FemtoBoltCamera:
             intrinsics = self._rescale_intrinsics(intrinsics, rgb.shape[1], rgb.shape[0])
             self._intrinsics = intrinsics
 
-        timestamp_ns = max(timestamp_us * 1000, 0)
         return RGBDFrame(
             cam_id=self.cam_id,
             rgb=rgb,

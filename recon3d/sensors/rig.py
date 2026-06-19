@@ -113,25 +113,34 @@ class MultiFemtoBoltRig:
         must be below configured threshold.
         Return type: mapping from camera ID to ``RGBDFrame``.
         """
-        # Read all cameras on the same hardware-synced trigger in three phases:
+        # Read all cameras on the same hardware-synced trigger in four phases:
         #   1. flush every camera's queued backlog (fast, back-to-back),
-        #   2. block for the next frame from each (after the flush, that is the next
-        #      synchronized trigger, identical across cameras),
-        #   3. align/decode each raw set (slow, but order-independent now).
-        # Doing the flush and grab back-to-back is what keeps the trigger identical;
-        # interleaving the grab with the heavy decode, or letting a slow consumer
-        # loop lag behind the FIFO, makes the cameras drift apart by whole frames.
-        # Cameras without the multi-phase API (replay/mock) use the single-call read.
+        #   2. block for the next frame from each -- after the flush that is the next
+        #      synchronized trigger, identical across cameras,
+        #   3. capture every camera's device timestamp immediately, while all raw
+        #      frame sets are still the freshly grabbed trigger,
+        #   4. align/decode each raw set.
+        # Phases 1-3 run back-to-back with no heavy work in between: that is what
+        # keeps the trigger identical. The timestamps must be captured before any
+        # decode because materialising one camera's frame can recycle the SDK buffers
+        # the others still reference, which would otherwise advance their timestamps
+        # by whole frame periods. Cameras without the multi-phase API (replay/mock)
+        # use the single-call read.
         if all(
             hasattr(camera, "flush_frames")
             and hasattr(camera, "grab_next_frameset")
+            and hasattr(camera, "frameset_device_timestamp_ns")
             and hasattr(camera, "frameset_to_rgbd")
             for camera in self.cameras
         ):
             for camera in self.cameras:
                 camera.flush_frames()
             raw = [(camera, camera.grab_next_frameset()) for camera in self.cameras]
-            frames = {camera.cam_id: camera.frameset_to_rgbd(frameset) for camera, frameset in raw}
+            stamped = [(camera, fs, camera.frameset_device_timestamp_ns(fs)) for camera, fs in raw]
+            frames = {
+                camera.cam_id: camera.frameset_to_rgbd(fs, timestamp_ns=ts)
+                for camera, fs, ts in stamped
+            }
         else:
             frames = {camera.cam_id: camera.read_aligned_frame() for camera in self.cameras}
         timestamps = [frame.timestamp_ns for frame in frames.values()]
