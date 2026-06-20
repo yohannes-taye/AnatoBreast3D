@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from data_loaders.breast_coco import BreastCocoDataset, breast_collate_fn
+from data_preprocess.breast_coco import BreastCocoDataset, breast_collate_fn
 
 
 def create_dummy_dataset(root: Path) -> None:

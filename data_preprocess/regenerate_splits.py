@@ -49,7 +49,7 @@ def regenerate_splits(
     train_d3 = sum(1 for f in train_files if f in dataset3_files)
     val_d3 = sum(1 for f in val_files if f in dataset3_files)
 
-    print(f"\n[Done] Regenerated splits:")
+    print("\n[Done] Regenerated splits:")
     print(f"  Train: {len(train_files)} ({train_d3} from Dataset3)")
     print(f"  Val:   {len(val_files)} ({val_d3} from Dataset3)")
     print(f"  Saved to: {splits_dir}")

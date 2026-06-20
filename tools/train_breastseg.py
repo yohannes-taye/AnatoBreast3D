@@ -7,13 +7,13 @@ import importlib.util
 import logging
 import math
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import torch
-import torch.nn.functional as F
 from torch import nn
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
@@ -23,9 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from data_loaders.breast_coco import BreastCocoDataset, breast_collate_fn
-from nets.segmentors.breastseg_multitask import MammaSegNet
-from utils.utils import seed_everything
+from data_preprocess.breast_coco import BreastCocoDataset, breast_collate_fn  # noqa: E402
+from nets.segmentors.breastseg_multitask import MammaSegNet  # noqa: E402
+from utils.utils import seed_everything  # noqa: E402
 
 
 def setup_logger(work_dir: str, log_filename: str = "train.log") -> logging.Logger:
@@ -387,6 +387,12 @@ def main() -> None:
     parser.add_argument("--data-root", required=False, help="Dataset root directory.")
     parser.add_argument("--init-from", required=False, help="Override initialization checkpoint.")
     parser.add_argument("--work-dir", required=False, help="Work directory for checkpoints.")
+    parser.add_argument(
+        "--deploy-to",
+        required=False,
+        help="If set, copy the best checkpoint here after training "
+        "(any existing file is backed up to <path>.bak first).",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -396,10 +402,10 @@ def main() -> None:
     work_dir = args.work_dir or cfg["experiment"]["output_dir"]
     os.makedirs(work_dir, exist_ok=True)
 
-    # Setup logger and TensorBoard
-    # Place logs in the project root logs directory
+    # Setup logger and TensorBoard.
+    # Keep generated training logs separate from SDK/runtime logs.
     project_root = Path(__file__).resolve().parents[1]
-    log_dir = os.path.join(project_root, "logs")
+    log_dir = os.path.join(project_root, "logs", "training")
     os.makedirs(log_dir, exist_ok=True)
 
     # Generate unique log filename based on work_dir name and timestamp
@@ -496,6 +502,20 @@ def main() -> None:
     logger.info(f"Total Epochs: {cfg['solver']['epochs']}")
     logger.info(f"All checkpoints saved in: {work_dir}")
     logger.info("="*80)
+
+    if args.deploy_to:
+        deploy_target = Path(args.deploy_to)
+        if not os.path.isfile(best_path):
+            logger.warning(f"[Deploy] Best checkpoint not found at {best_path}; skipping deploy.")
+        else:
+            deploy_target.parent.mkdir(parents=True, exist_ok=True)
+            if deploy_target.is_file():
+                backup_path = deploy_target.with_name(deploy_target.name + ".bak")
+                shutil.copy2(deploy_target, backup_path)
+                logger.info(f"[Deploy] Backed up existing checkpoint to {backup_path}")
+            shutil.copy2(best_path, deploy_target)
+            logger.info(f"[Deploy] Deployed best checkpoint to {deploy_target}")
+
     logger.info("\n✅ DONE: MammaSegNet (B2) training pipeline ready for inference.")
 
 

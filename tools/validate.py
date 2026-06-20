@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from data_loaders.breast_coco import BreastCocoDataset, breast_collate_fn
-from train_breastseg import build_model, evaluate, load_config
+from data_preprocess.breast_coco import BreastCocoDataset, breast_collate_fn  # noqa: E402
+from train_breastseg import build_model, evaluate, load_config  # noqa: E402
 
 
 def build_val_loader(cfg, data_root):

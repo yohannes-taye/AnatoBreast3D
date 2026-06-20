@@ -16,6 +16,7 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
+from data_preprocess.aug_ops import affine_warp, horizontal_flip
 from utils.utils import cvtColor, preprocess_input
 
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
@@ -189,15 +190,7 @@ class BreastCocoDataset(Dataset):
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         if not self.train or random.random() > 0.5:
             return image, mask, boxes
-        image = image[:, ::-1]
-        mask = mask[:, ::-1]
-        if boxes.size:
-            width = image.shape[1]
-            flipped = boxes.copy()
-            flipped[:, 0] = width - boxes[:, 2]
-            flipped[:, 2] = width - boxes[:, 0]
-            boxes = flipped
-        return image, mask, boxes
+        return horizontal_flip(image, mask, boxes)
 
     def _random_affine(
         self,
@@ -212,41 +205,18 @@ class BreastCocoDataset(Dataset):
         scale = random.uniform(0.95, 1.05)
         tx = random.uniform(-0.05, 0.05) * w
         ty = random.uniform(-0.05, 0.05) * h
-        center = (w / 2, h / 2)
-
-        matrix = cv2.getRotationMatrix2D(center, angle, scale)
-        matrix[0, 2] += tx
-        matrix[1, 2] += ty
-
-        image = cv2.warpAffine(image, matrix, (w, h), flags=cv2.INTER_LINEAR, borderValue=(128, 128, 128))
-        mask = cv2.warpAffine(mask, matrix, (w, h), flags=cv2.INTER_NEAREST, borderValue=255)
-        if boxes.size:
-            boxes = self._transform_boxes(boxes, matrix, w, h)
-        return image, mask, boxes
-
-    def _transform_boxes(self, boxes: np.ndarray, matrix: np.ndarray, width: int, height: int) -> np.ndarray:
-        num_boxes = boxes.shape[0]
-        points = np.ones((num_boxes * 4, 3), dtype=np.float32)
-        corners = np.array(
-            [
-                [boxes[:, 0], boxes[:, 1]],
-                [boxes[:, 2], boxes[:, 1]],
-                [boxes[:, 2], boxes[:, 3]],
-                [boxes[:, 0], boxes[:, 3]],
-            ]
-        ).transpose(2, 0, 1).reshape(-1, 2)
-        points[:, :2] = corners
-        transformed = points @ matrix.T
-        transformed = transformed.reshape(num_boxes, 4, 2)
-        xs = transformed[:, :, 0]
-        ys = transformed[:, :, 1]
-        x1 = np.clip(xs.min(axis=1), 0, width - 1)
-        y1 = np.clip(ys.min(axis=1), 0, height - 1)
-        x2 = np.clip(xs.max(axis=1), 0, width - 1)
-        y2 = np.clip(ys.max(axis=1), 0, height - 1)
-        boxes = np.stack([x1, y1, x2, y2], axis=1)
-        valid = (x2 - x1 > 1) & (y2 - y1 > 1)
-        return boxes[valid]
+        return affine_warp(
+            image,
+            mask,
+            boxes,
+            angle=angle,
+            scale=scale,
+            tx_px=tx,
+            ty_px=ty,
+            image_border=(128, 128, 128),
+            mask_border=255,
+            min_box_side=1.0,
+        )
 
     def _color_jitter(self, image: np.ndarray) -> np.ndarray:
         if not self.train:

@@ -13,13 +13,13 @@ here follows the current code layout.
 
 ```text
 LabelMe / processed breast images
-  -> tools/convert_breast_labelme.py or tools/prepare_data.py
+  -> data_preprocess/convert_breast_labelme.py or data_preprocess/prepare_data.py
   -> data/breastseg/processed_merged
-  -> data_loaders.BreastCocoDataset
+  -> data_preprocess.BreastCocoDataset
   -> tools/train_breastseg.py
   -> nets.segmentors.MammaSegNet
   -> work_dirs/breastseg_b2/best.pth
-  -> tools/infer_demo.py or recon3d.perception.BreastPerceptionAdapter
+  -> tools/breastseg_infer.py or recon3d.perception.BreastPerceptionAdapter
   -> RGB breast masks + nipple boxes
   -> recon3d.geometry.backproject
   -> recon3d.geometry.nipple3d
@@ -38,9 +38,9 @@ Medical-breast-segmentation-and-reconstruction/
 |-- checkpoint/                 # optional local weights; ignored except for README instructions
 |-- configs/                    # 2D model and 3D reconstruction configuration files
 |-- data/                       # local datasets and replay/recorded data roots
-|-- data_loaders/               # PyTorch dataset and collate layer for breast training data
+|-- data_preprocess/            # dataset prep + PyTorch dataset/collate/augmentation
 |-- docs/                       # project documentation and operating notes
-|-- logs/                       # training logs written by tools/train_breastseg.py
+|-- logs/                       # local runtime logs grouped by source
 |-- nets/                       # MammaSegNet, MiT backbone, heads, necks, losses/utilities
 |-- recon3d/                    # Orbbec RGB-D reconstruction package
 |-- tests/                      # unit, smoke, and single-view demo assets
@@ -61,14 +61,14 @@ Medical-breast-segmentation-and-reconstruction/
 | `checkpoint/` | Deployed/named perception weights, separate from raw training output. | `breastseg.pth`, `README.md`. | `configs/recon3d/default.yaml` loads `checkpoint/breastseg.pth`. Training still writes `work_dirs/breastseg_b2/best.pth`; copy/rename it here to deploy. Future models can use new subfolders. |
 | `configs/` | Configuration source for both pipeline halves. | `breastseg/breastseg_b2_inplace.py`, `recon3d/default.yaml`. | `breastseg` controls dataset paths, model size, loss weights, optimizer, sampling repeats, and inference thresholds. `recon3d` controls checkpoint path, device, fusion voxel size, nipple 3D thresholds, output path, and sync drift. |
 | `data/` | Local data root consumed by data preparation, loaders, and offline replay. | `data/breastseg/raw_combined`, `data/Replay`, `dataset3_converted`, `processed_merged`. | `processed_merged` is the default training root: `images/`, `sem_masks/`, `annotations/coco_det.json`, `splits/train.txt`, `splits/val.txt`. SDK bag sessions used by the viewer Replay panel live under `data/Replay/<session>/session.json`. |
-| `data_loaders/` | Converts processed data into model-ready PyTorch batches. | `breast_coco.py`. | `BreastCocoDataset` reads images, segmentation masks, COCO nipple boxes, split files, hard-sample repeats, augmentation, letterbox resize, and returns `images`, `gt_seg`, `gt_boxes`, validity masks, and metadata. |
+| `data_preprocess/` | Offline dataset prep plus model-ready batch loading. | `breast_coco.py`, `aug_ops.py`, `convert_breast_labelme.py`, `prepare_data.py`, `regenerate_splits.py`, `augment_dataset.py`. | `BreastCocoDataset` reads images, segmentation masks, COCO nipple boxes, split files, hard-sample repeats, applies augmentation + letterbox resize, and returns `images`, `gt_seg`, `gt_boxes`, validity masks, and metadata. `aug_ops.py` holds the geometric augmentation primitives shared by on-the-fly (`breast_coco.py`) and offline (`augment_dataset.py`) augmentation; the CLI scripts convert, split, and augment datasets. |
 | `docs/` | Human-facing project knowledge base. | `QUICKSTART.md`, `DATA_LAYOUT.md`, `PROJECT_STRUCTURE.md`. | Documents environment setup, data layout, pipeline commands, coordinate conventions, and folder responsibilities. |
-| `logs/` | Stores training logs. | `train_breastseg_b2_*.log`. | Created by `tools/train_breastseg.py`; useful for checking epoch loss, validation Dice/mIoU/AP, FPS, and checkpoint history. |
+| `logs/` | Local runtime logs grouped by source. | `training/`, `orbbec_sdk/`, `README.MD`. | Training writes to `logs/training/`. Orbbec SDK logs should be kept under `logs/orbbec_sdk/` when collected manually; the SDK may still auto-create a capitalized `Log/` folder when running from the project root. Generated log files are ignored by git. |
 | `nets/` | Core 2D neural network implementation. | `backbone.py`, `segmentors/`, `decode_heads/`, `dense_heads/`, `necks/`, `utils/`. | Defines the MiT backbone, MammaSeg segmentation head, LightFPN, FCOS-style nipple detector, Gaussian prior builder, and multi-task `MammaSegNet`. |
 | `recon3d/` | 3D reconstruction and localisation stack. | `pipeline.py`, `cli.py`, `config.py`, plus subpackages. | Takes synchronized aligned RGB-D frames, runs the existing 2D model, cleans masks/depth, back-projects masked depth, estimates/fuses nipple observations, fuses point clouds, optionally applies surface smoothing, publishes live viewer artifacts, and writes reconstruction outputs. |
 | `tests/` | Regression protection and demo assets. | `test_pipeline.py`, `test_backproject.py`, `test_fusion.py`, `test_nipple3d.py`, `test_sensors.py`, `singleview/`. | Synthetic tests cover 3D math, replay cameras, config loading, perception pipeline integration, and single-view image/video inference helpers. Hardware is not required for the current tests. |
-| `tools/` | Operational command-line scripts. | `run_recon3d_live.py`, `serve_recon3d_viewer.py`, `train_breastseg.py`, `infer_demo.py`, `validate.py`, `convert_breast_labelme.py`, `prepare_data.py`, `regenerate_splits.py`, `export_onnx.py`, `model_summary.py`. | Thin launchers plus the 2D model/data toolchain. `serve_recon3d_viewer.py` serves the browser UI and can launch SDK bag replay through `recon3d.cli replay`; formal 3D runtime behavior belongs in `recon3d.cli` and `recon3d.pipeline`. |
-| `utils/` | Legacy helper utilities. | `utils.py`, `dataloader.py`, `utils_metrics.py`, `callbacks.py`. | Current multi-task training still uses helpers such as `seed_everything`, `cvtColor`, `resize_image`, and `preprocess_input`. |
+| `tools/` | Operational command-line scripts. | `run_recon3d_live.py`, `serve_recon3d_viewer.py`, `train_breastseg.py`, `breastseg_infer.py`, `validate.py`, `export_onnx.py`, `model_summary.py`. | Thin launchers plus the 2D model toolchain; offline dataset prep lives in `data_preprocess/`. `serve_recon3d_viewer.py` serves the browser UI and can launch SDK bag replay through `recon3d.cli replay`; formal 3D runtime behavior belongs in `recon3d.cli` and `recon3d.pipeline`. |
+| `utils/` | Legacy helper utilities. | `utils.py`, `utils_metrics.py`, `callbacks.py`. | Current multi-task training still uses helpers such as `seed_everything`, `cvtColor`, `resize_image`, and `preprocess_input`. |
 | `viewer/` | Browser visualization frontend. | `live.html`, `active_learning.js`, `active_learning.css`. | `live.html` is the single visualization page for live and SDK bag replay. It embeds the Rerun stream from `live_manifest.json`, exposes the Replay panel, and hosts the active-learning UI. |
 | `work_dirs/` | Experiment output root. | `breastseg_b2/best.pth`, `epoch_*.pth`, `tensorboard/`. | Training checkpoints and TensorBoard event files live here. Perception loads the deployed copy at `checkpoint/breastseg.pth`. |
 ## `configs/`
@@ -212,23 +212,38 @@ Subpackages:
 | --- | --- |
 | `calibration/` | Charuco detection, solvePnP pose estimation, reprojection error summaries, and JSON IO for intrinsics/extrinsics/depth configs. It uses the convention `p_world = T_world_cam @ p_cam_h`. |
 | `geometry/` | Metric geometry operations: valid depth masking, depth back-projection to camera-frame point clouds, camera-to-world transform, point cloud merge/downsample/outlier removal, 3D nipple candidate extraction, covariance estimation, side assignment, outlier rejection, and final left/right fusion. |
-| `perception/` | Adapter between `recon3d` and the existing 2D model. It letterboxes RGB frames with `tools.infer_demo` preprocessing, runs `MammaSegNet`, and remaps masks/boxes back to original aligned RGB/depth pixels. |
+| `perception/` | Adapter between `recon3d` and the existing 2D model. It letterboxes RGB frames with `tools.breastseg_infer` preprocessing, runs `MammaSegNet`, and remaps masks/boxes back to original aligned RGB/depth pixels. |
 | `sensors/` | Camera abstraction layer. `ReplayRGBDCamera` and `MockRGBDCamera` are functional now; `FemtoBoltCamera` guards the unfinished `pyorbbecsdk` hardware integration. `MultiFemtoBoltRig` synchronizes camera reads by timestamp drift. |
 | `smoothing/` | Low-latency temporal filters for 3D nipple coordinates, currently One Euro filtering in the main pipeline and an optional constant-velocity Kalman filter. |
 
 All geometry outputs are in metres. Raw depth PNGs are treated as raw depth
 units, normally millimetres, and converted using `DepthConfig.depth_scale_m`.
 
+## `data_preprocess/`
+
+```text
+data_preprocess/
+|-- breast_coco.py            # BreastCocoDataset + collate (runtime training data)
+|-- aug_ops.py                # shared geometric augmentation primitives
+|-- convert_breast_labelme.py # LabelMe -> COCO conversion
+|-- prepare_data.py           # zip -> processed dataset
+|-- regenerate_splits.py      # train/val split generation
+|-- augment_dataset.py        # offline dataset augmentation
+`-- __init__.py
+```
+
+`data_preprocess/` holds both offline dataset preparation (convert / split /
+augment) and the runtime `BreastCocoDataset` used by training. `aug_ops.py`
+provides the geometric augmentation primitives shared by `breast_coco.py`
+(on-the-fly) and `augment_dataset.py` (offline), so the two paths stay in sync.
+
 ## `tools/`
 
 ```text
 tools/
-|-- convert_breast_labelme.py
-|-- prepare_data.py
-|-- regenerate_splits.py
 |-- train_breastseg.py
 |-- validate.py
-|-- infer_demo.py
+|-- breastseg_infer.py
 |-- export_onnx.py
 |-- model_summary.py
 `-- __init__.py
@@ -241,16 +256,17 @@ convert_breast_labelme.py / prepare_data.py
   -> regenerate_splits.py if needed
   -> train_breastseg.py
   -> validate.py
-  -> infer_demo.py
+  -> breastseg_infer.py
   -> export_onnx.py if deployment needs ONNX
 ```
 
 `train_breastseg.py` is the main training entry. It loads config, builds
 `BreastCocoDataset`, builds `MammaSegNet`, trains with AdamW/cosine LR/AMP,
-evaluates Dice, mIoU, AP, AP-small, writes logs to `logs/`, checkpoints to
-`work_dirs/`, and TensorBoard events to `work_dirs/<experiment>/tensorboard`.
+evaluates Dice, mIoU, AP, AP-small, writes logs to `logs/training/`,
+checkpoints to `work_dirs/`, and TensorBoard events to
+`work_dirs/<experiment>/tensorboard`.
 
-`infer_demo.py` is the batch-friendly single-view inference script used both by
+`breastseg_infer.py` is the batch-friendly single-view inference script used both by
 humans and by `recon3d.perception.inference` for preprocessing/postprocessing
 helpers.
 
@@ -283,11 +299,21 @@ manual inspection of 2D perception.
 2D training outputs:
 
 ```text
-logs/train_breastseg_b2_*.log
+logs/training/train_breastseg_b2_*.log
 work_dirs/breastseg_b2/epoch_*.pth
 work_dirs/breastseg_b2/best.pth
 work_dirs/breastseg_b2/tensorboard/
 ```
+
+Orbbec SDK hardware logs:
+
+```text
+logs/orbbec_sdk/OrbbecSDK.log*.txt
+Log/OrbbecSDK.log*.txt
+```
+
+Prefer `logs/orbbec_sdk/` for collected SDK logs. The capitalized `Log/`
+directory is kept ignored because some Orbbec SDK runs create it automatically.
 
 3D reconstruction outputs:
 
@@ -304,10 +330,10 @@ rejected cameras. `run_summary.json` stores timing and measurable run metrics.
 ## Standard Commands
 
 ```bash
-python tools/convert_breast_labelme.py --json-dir ./data/breastseg/raw_combined/labelme --image-dir ./data/breastseg/raw_combined/images --out ./data/breastseg/processed_merged
-python tools/regenerate_splits.py --images-dir ./data/breastseg/processed_merged/images --splits-dir ./data/breastseg/processed_merged/splits
+python data_preprocess/convert_breast_labelme.py --json-dir ./data/breastseg/raw_combined/labelme --image-dir ./data/breastseg/raw_combined/images --out ./data/breastseg/processed_merged
+python data_preprocess/regenerate_splits.py --images-dir ./data/breastseg/processed_merged/images --splits-dir ./data/breastseg/processed_merged/splits
 python tools/train_breastseg.py --config configs/breastseg/breastseg_b2_inplace.py
-python tools/infer_demo.py --config configs/breastseg/breastseg_b2_inplace.py --checkpoint checkpoint/breastseg.pth --input tests/singleview/input_vis --save-dir tests/singleview/output_vis
+python tools/breastseg_infer.py --config configs/breastseg/breastseg_b2_inplace.py --checkpoint checkpoint/breastseg.pth --input tests/singleview/input_vis --save-dir tests/singleview/output_vis
 python -m recon3d.cli replay --config configs/recon3d/default.yaml --bag-session data/Replay/orbbec_bag_720p_100s --out runs/orbbec_bag_720p_100s_replay --visualize --probe-frames 180 --wait-timeout-ms 5000
 python -m pytest
 ruff check .

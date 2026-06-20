@@ -3,8 +3,13 @@
 The project separates data-loading code from local training data:
 
 ```text
-data_loaders/                  # Python package imported by training code
+data_preprocess/               # Python package: dataset prep + training data loading
   breast_coco.py               # BreastCocoDataset and breast_collate_fn
+  aug_ops.py                   # shared geometric augmentation primitives
+  convert_breast_labelme.py    # LabelMe -> COCO conversion
+  prepare_data.py              # zip -> processed dataset
+  regenerate_splits.py         # train/val split generation
+  augment_dataset.py           # offline dataset augmentation (6 -> N)
 
 data/breastseg/                # local data, ignored by git
   raw_combined/
@@ -26,13 +31,13 @@ The default training config points to:
 The loader import path is:
 
 ```python
-from data_loaders.breast_coco import BreastCocoDataset, breast_collate_fn
+from data_preprocess.breast_coco import BreastCocoDataset, breast_collate_fn
 ```
 
 To rebuild a processed dataset from a zip:
 
 ```bash
-python tools/prepare_data.py \
+python data_preprocess/prepare_data.py \
   --zip /path/to/BreastSegDataset.zip \
   --out ./data/breastseg/processed_merged
 ```
@@ -40,7 +45,7 @@ python tools/prepare_data.py \
 To convert LabelMe-style annotations:
 
 ```bash
-python tools/convert_breast_labelme.py \
+python data_preprocess/convert_breast_labelme.py \
   --json-dir ./data/breastseg/raw_combined/labelme \
   --image-dir ./data/breastseg/raw_combined/images \
   --out ./data/breastseg/processed_merged
@@ -49,7 +54,7 @@ python tools/convert_breast_labelme.py \
 To regenerate train/val splits:
 
 ```bash
-python tools/regenerate_splits.py \
+python data_preprocess/regenerate_splits.py \
   --images-dir ./data/breastseg/processed_merged/images \
   --splits-dir ./data/breastseg/processed_merged/splits \
   --dataset3-images-dir ./data/breastseg/dataset3_converted/images \

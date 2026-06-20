@@ -30,6 +30,6 @@ module = ["cv2", "cv2.*", "open3d", "open3d.*", "torch", "torch.*", "PIL", "PIL.
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["tools.*", "nets.*", "data_loaders.*", "utils.*"]
+module = ["tools.*", "nets.*", "data_preprocess.*", "utils.*"]
 follow_imports = "skip"
 ignore_errors = true
