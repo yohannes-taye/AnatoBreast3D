@@ -18,7 +18,7 @@ TOOLS_DIR = ROOT / "tools"
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from tools.infer_demo import list_images, preprocess, postprocess_mask, remap_boxes, visualize
+from tools.breastseg_infer import list_images, preprocess, postprocess_mask, remap_boxes, visualize
 from train_breastseg import build_model, load_config
 from utils.utils import cvtColor
 

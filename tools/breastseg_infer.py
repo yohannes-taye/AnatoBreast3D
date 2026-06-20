@@ -1,9 +1,14 @@
-"""Inference demo for MammaSegNet."""
+"""MammaSegNet 2D inference: shared letterbox pre/post-processing plus a demo CLI.
+
+``preprocess`` / ``postprocess_mask`` / ``remap_boxes`` are reused by
+``recon3d.perception.inference`` so offline inference and the 3D pipeline share
+identical letterbox and coordinate-remap logic. ``main`` runs the batch demo.
+"""
 
 from __future__ import annotations
 
 import argparse
-import os
+import sys
 from pathlib import Path
 from typing import List
 
@@ -12,8 +17,12 @@ import numpy as np
 import torch
 from PIL import Image
 
-from train_breastseg import build_model, load_config
-from utils.utils import cvtColor, preprocess_input, resize_image
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.train_breastseg import build_model, load_config  # noqa: E402
+from utils.utils import cvtColor, preprocess_input, resize_image  # noqa: E402
 
 
 def list_images(path: str) -> List[Path]:
