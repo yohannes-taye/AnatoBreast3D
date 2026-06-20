@@ -6,7 +6,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from nipple_guided_recon3D.config import CameraExtrinsics, CameraIntrinsics, DepthConfig
+from anatomy_guided_recon3d.config import CameraExtrinsics, CameraIntrinsics, DepthConfig
 
 
 COORDINATE_CONVENTION = "p_world = T_world_cam @ p_cam_h"

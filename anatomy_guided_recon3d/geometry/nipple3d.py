@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import open3d as o3d
 
-from nipple_guided_recon3D.config import (
+from anatomy_guided_recon3d.config import (
     CameraExtrinsics,
     Nipple3DConfig,
     NippleObservation,
@@ -16,7 +16,7 @@ from nipple_guided_recon3D.config import (
     Side,
     FusedNipple,
 )
-from nipple_guided_recon3D.geometry.backproject import backproject_depth_to_arrays
+from anatomy_guided_recon3d.geometry.backproject import backproject_depth_to_arrays
 
 
 def _clip_box(box_xyxy: np.ndarray, width: int, height: int) -> tuple[int, int, int, int] | None:

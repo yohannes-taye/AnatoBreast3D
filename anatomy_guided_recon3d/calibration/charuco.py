@@ -7,7 +7,7 @@ from typing import Any, Mapping
 import cv2
 import numpy as np
 
-from nipple_guided_recon3D.config import CameraExtrinsics, CameraIntrinsics, RGBDFrame
+from anatomy_guided_recon3d.config import CameraExtrinsics, CameraIntrinsics, RGBDFrame
 
 
 LOGGER = logging.getLogger(__name__)

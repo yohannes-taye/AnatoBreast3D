@@ -8,8 +8,8 @@ from typing import Iterable, Sequence
 import cv2
 import numpy as np
 
-from nipple_guided_recon3D.calibration.io import camera_intrinsics_from_dict, depth_config_from_dict
-from nipple_guided_recon3D.config import CameraIntrinsics, DepthConfig, RGBDFrame
+from anatomy_guided_recon3d.calibration.io import camera_intrinsics_from_dict, depth_config_from_dict
+from anatomy_guided_recon3d.config import CameraIntrinsics, DepthConfig, RGBDFrame
 
 
 LOGGER = logging.getLogger(__name__)

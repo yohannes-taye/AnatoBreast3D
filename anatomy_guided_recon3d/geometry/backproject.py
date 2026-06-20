@@ -3,7 +3,7 @@
 import numpy as np
 import open3d as o3d
 
-from nipple_guided_recon3D.config import CameraIntrinsics, DepthConfig
+from anatomy_guided_recon3d.config import CameraIntrinsics, DepthConfig
 
 
 def valid_depth_mask(depth_raw: np.ndarray, depth_config: DepthConfig) -> np.ndarray:

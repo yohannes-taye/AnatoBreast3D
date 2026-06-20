@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import open3d as o3d
 
-from nipple_guided_recon3D.config import (
+from anatomy_guided_recon3d.config import (
     CameraExtrinsics,
     DepthConfig,
     FusedNipple,
@@ -18,7 +18,7 @@ from nipple_guided_recon3D.config import (
     PerceptionResult,
     RGBDFrame,
 )
-from nipple_guided_recon3D.geometry.backproject import backproject_masked_depth
+from anatomy_guided_recon3d.geometry.backproject import backproject_masked_depth
 
 
 class FusionBackend(Protocol):

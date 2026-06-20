@@ -11,13 +11,13 @@ import cv2
 import numpy as np
 import yaml
 
-from nipple_guided_recon3D.calibration.charuco import (
+from anatomy_guided_recon3d.calibration.charuco import (
     CharucoBoardSpec,
     estimate_extrinsics_from_charuco,
     summarize_reprojection_errors,
 )
-from nipple_guided_recon3D.calibration.io import load_extrinsics, save_extrinsics
-from nipple_guided_recon3D.config import (
+from anatomy_guided_recon3d.calibration.io import load_extrinsics, save_extrinsics
+from anatomy_guided_recon3d.config import (
     CameraExtrinsics,
     FusionConfig,
     Nipple3DConfig,
@@ -25,9 +25,9 @@ from nipple_guided_recon3D.config import (
     PerceptionConfig,
     Recon3DConfig,
 )
-from nipple_guided_recon3D.pipeline import Recon3DPipeline
-from nipple_guided_recon3D.sensors.femto_bolt import FemtoBoltCamera, HardwareUnavailableError, ReplayRGBDCamera
-from nipple_guided_recon3D.sensors.rig import MultiFemtoBoltRig
+from anatomy_guided_recon3d.pipeline import Recon3DPipeline
+from anatomy_guided_recon3d.sensors.femto_bolt import FemtoBoltCamera, HardwareUnavailableError, ReplayRGBDCamera
+from anatomy_guided_recon3d.sensors.rig import MultiFemtoBoltRig
 
 
 LOGGER = logging.getLogger(__name__)

@@ -8,27 +8,27 @@ from typing import Mapping
 import numpy as np
 import open3d as o3d
 
-from nipple_guided_recon3D.config import (
+from anatomy_guided_recon3d.config import (
     CameraExtrinsics,
     FusedNipple,
     Recon3DConfig,
     ReconstructionResult,
     RGBDFrame,
 )
-from nipple_guided_recon3D.geometry.fusion import (
+from anatomy_guided_recon3d.geometry.fusion import (
     FusionBackend,
     PointCloudFusionBackend,
     build_nipple_guided_clouds,
     point_cloud_bounds,
 )
-from nipple_guided_recon3D.geometry.nipple3d import (
+from anatomy_guided_recon3d.geometry.nipple3d import (
     estimate_nipple_observations,
     fuse_nipple_observations,
     nipple_json_payload,
 )
-from nipple_guided_recon3D.perception.inference import BreastPerceptionAdapter
-from nipple_guided_recon3D.sensors.rig import MultiFemtoBoltRig
-from nipple_guided_recon3D.smoothing.temporal import OneEuroFilter3D
+from anatomy_guided_recon3d.perception.inference import BreastPerceptionAdapter
+from anatomy_guided_recon3d.sensors.rig import MultiFemtoBoltRig
+from anatomy_guided_recon3d.smoothing.temporal import OneEuroFilter3D
 
 
 LOGGER = logging.getLogger(__name__)

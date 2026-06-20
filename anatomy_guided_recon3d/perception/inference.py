@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from nipple_guided_recon3D.config import PerceptionConfig, PerceptionResult, RGBDFrame, Recon3DConfig
+from anatomy_guided_recon3d.config import PerceptionConfig, PerceptionResult, RGBDFrame, Recon3DConfig
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 if str(TOOLS_DIR) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIR))
 
-from tools.infer_demo import postprocess_mask, preprocess, remap_boxes  # noqa: E402
+from tools.breastseg_infer import postprocess_mask, preprocess, remap_boxes  # noqa: E402
 from tools.train_breastseg import build_model, load_config  # noqa: E402
 
 

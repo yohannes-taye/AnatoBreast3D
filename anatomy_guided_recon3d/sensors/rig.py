@@ -3,7 +3,7 @@
 import logging
 from typing import Protocol, Sequence
 
-from nipple_guided_recon3D.config import RGBDFrame
+from anatomy_guided_recon3d.config import RGBDFrame
 
 
 LOGGER = logging.getLogger(__name__)
