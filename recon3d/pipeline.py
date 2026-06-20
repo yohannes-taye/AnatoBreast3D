@@ -63,7 +63,12 @@ def _choose_rerun_ports(web_port: int, grpc_port: int) -> tuple[int, int]:
     raise OSError(f"No free rerun port pair found from {web_port}/{grpc_port}")
 
 
-def _build_rerun_blueprint(rrb, cam_ids: list[str]):
+def _build_rerun_blueprint(rrb, cam_ids: list[str], log_cameras: bool):
+    if not log_cameras:
+        return rrb.Blueprint(
+            rrb.Spatial3DView(origin="world", name="Fused 3D"),
+            collapse_panels=True,
+        )
     rgb_views = [rrb.Spatial2DView(origin=f"cams/{cam_id}", name=f"{cam_id} rgb") for cam_id in cam_ids]
     depth_views = [rrb.Spatial2DView(origin=f"depth/{cam_id}", name=f"{cam_id} depth") for cam_id in cam_ids]
     return rrb.Blueprint(
@@ -91,6 +96,7 @@ class Recon3DPipeline:
         rerun_web_port: int = 9090,
         rerun_grpc_port: int = 9876,
         rerun_memory: str = "25%",
+        rerun_log_cameras: bool | None = None,
         viewer_rgb_width: int = 640,
     ) -> None:
         """Create the reconstruction pipeline.
@@ -113,6 +119,11 @@ class Recon3DPipeline:
         self.rerun_web_port = int(rerun_web_port)
         self.rerun_grpc_port = int(rerun_grpc_port)
         self.rerun_memory = str(rerun_memory)
+        self.rerun_log_cameras = (
+            bool(config.visualization.rerun_log_cameras)
+            if rerun_log_cameras is None
+            else bool(rerun_log_cameras)
+        )
         self.viewer_rgb_width = int(viewer_rgb_width)
         self._frame_index = 0
         self._rr = None
@@ -188,7 +199,7 @@ class Recon3DPipeline:
 
             web_port, grpc_port = _choose_rerun_ports(self.rerun_web_port, self.rerun_grpc_port)
             rr.init("breast_recon3d")
-            blueprint = _build_rerun_blueprint(rrb, cam_ids)
+            blueprint = _build_rerun_blueprint(rrb, cam_ids, self.rerun_log_cameras)
 
             def serve_rerun() -> None:
                 try:
@@ -234,39 +245,40 @@ class Recon3DPipeline:
             return
         rr.set_time("frame", sequence=self._frame_index)
         rr.set_time("time", timestamp=frame_wall_s)
-        for cam_id, frame in sorted(frames.items()):
-            perception = perceptions.get(cam_id)
-            depth_units_per_meter = 1.0 / frame.depth_config.depth_scale_m
-            rr.log(f"cams/{cam_id}/image", rr.Image(frame.rgb))
-            rr.log(
-                f"depth/{cam_id}",
-                rr.DepthImage(
-                    frame.depth_mm,
-                    meter=depth_units_per_meter,
-                    colormap="turbo",
-                    depth_range=[self.config.cloud_cleanup.min_depth_m, self.config.cloud_cleanup.max_depth_m],
-                ),
-            )
-            if perception is None:
-                continue
-            rr.log(f"cams/{cam_id}/seg", rr.SegmentationImage(perception.breast_mask.astype(np.uint8), opacity=0.5))
-            boxes = np.asarray(perception.nipple_boxes_xyxy, dtype=np.float32)
-            if len(boxes):
-                labels = [f"nipple {float(score):.2f}" for score in perception.nipple_scores]
+        if self.rerun_log_cameras:
+            for cam_id, frame in sorted(frames.items()):
+                perception = perceptions.get(cam_id)
+                depth_units_per_meter = 1.0 / frame.depth_config.depth_scale_m
+                rr.log(f"cams/{cam_id}/image", rr.Image(frame.rgb))
                 rr.log(
-                    f"cams/{cam_id}/nipple",
-                    rr.Boxes2D(
-                        mins=boxes[:, :2],
-                        sizes=boxes[:, 2:] - boxes[:, :2],
-                        colors=[(255, 64, 64)] * len(boxes),
-                        labels=labels,
+                    f"depth/{cam_id}",
+                    rr.DepthImage(
+                        frame.depth_mm,
+                        meter=depth_units_per_meter,
+                        colormap="turbo",
+                        depth_range=[self.config.cloud_cleanup.min_depth_m, self.config.cloud_cleanup.max_depth_m],
                     ),
                 )
-            else:
-                rr.log(
-                    f"cams/{cam_id}/nipple",
-                    rr.Boxes2D(mins=np.zeros((0, 2), dtype=np.float32), sizes=np.zeros((0, 2), dtype=np.float32)),
-                )
+                if perception is None:
+                    continue
+                rr.log(f"cams/{cam_id}/seg", rr.SegmentationImage(perception.breast_mask.astype(np.uint8), opacity=0.5))
+                boxes = np.asarray(perception.nipple_boxes_xyxy, dtype=np.float32)
+                if len(boxes):
+                    labels = [f"nipple {float(score):.2f}" for score in perception.nipple_scores]
+                    rr.log(
+                        f"cams/{cam_id}/nipple",
+                        rr.Boxes2D(
+                            mins=boxes[:, :2],
+                            sizes=boxes[:, 2:] - boxes[:, :2],
+                            colors=[(255, 64, 64)] * len(boxes),
+                            labels=labels,
+                        ),
+                    )
+                else:
+                    rr.log(
+                        f"cams/{cam_id}/nipple",
+                        rr.Boxes2D(mins=np.zeros((0, 2), dtype=np.float32), sizes=np.zeros((0, 2), dtype=np.float32)),
+                    )
 
         points = np.asarray(result.fused_cloud.points)
         colors = np.asarray(result.fused_cloud.colors)

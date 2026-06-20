@@ -56,6 +56,11 @@ surface:
   normal_max_nn: 30
   min_points: 500
 
+visualization:
+  # Browser Cameras already streams RGB/depth previews from live_manifest outputs.
+  # Keep Rerun focused on fused 3D/timing unless 2D overlay debugging is needed.
+  rerun_log_cameras: false
+
 nipple3d:
   dbscan_eps_m: 0.005
   min_cluster_points: 30

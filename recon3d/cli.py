@@ -28,6 +28,7 @@ from recon3d.config import (
     PerceptionConfig,
     Recon3DConfig,
     SurfaceConfig,
+    VisualizationConfig,
 )
 from recon3d.pipeline import Recon3DPipeline
 from recon3d.sensors.femto_bolt import FemtoBoltCamera, HardwareUnavailableError, OrbbecBagCamera, ReplayRGBDCamera
@@ -63,6 +64,7 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
     cleanup_raw = raw.get("cloud_cleanup", {})
     fusion_raw = raw.get("fusion", {})
     surface_raw = raw.get("surface", {})
+    visualization_raw = raw.get("visualization", {})
     nipple_raw = raw.get("nipple3d", {})
     output_dir = output_override or (Path(raw["output_dir"]) if raw.get("output_dir") else None)
     config = Recon3DConfig(
@@ -96,6 +98,9 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
             normal_radius_m=float(surface_raw.get("normal_radius_m", 0.01)),
             normal_max_nn=int(surface_raw.get("normal_max_nn", 30)),
             min_points=int(surface_raw.get("min_points", 500)),
+        ),
+        visualization=VisualizationConfig(
+            rerun_log_cameras=bool(visualization_raw.get("rerun_log_cameras", False)),
         ),
         nipple3d=Nipple3DConfig(
             dbscan_eps_m=float(nipple_raw.get("dbscan_eps_m", 0.005)),
@@ -1303,6 +1308,12 @@ def _add_visualization_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--rerun-web-port", type=int, default=9090, help="Port hosting rerun web assets.")
     parser.add_argument("--rerun-grpc-port", type=int, default=9876, help="Port hosting rerun data.")
     parser.add_argument("--rerun-mem", default="25%", help="rerun server memory budget.")
+    parser.add_argument(
+        "--rerun-log-cameras",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Publish per-camera RGB/depth/2D overlays into Rerun; defaults to visualization.rerun_log_cameras.",
+    )
     parser.add_argument("--viewer-rgb-width", type=int, default=640, help="Width of RGB/mask preview images.")
 
 
@@ -1312,6 +1323,7 @@ def _pipeline_visualization_kwargs(args: argparse.Namespace) -> dict[str, Any]:
         "rerun_web_port": int(getattr(args, "rerun_web_port", 9090)),
         "rerun_grpc_port": int(getattr(args, "rerun_grpc_port", 9876)),
         "rerun_memory": str(getattr(args, "rerun_mem", "25%")),
+        "rerun_log_cameras": getattr(args, "rerun_log_cameras", None),
         "viewer_rgb_width": int(getattr(args, "viewer_rgb_width", 640)),
     }
 

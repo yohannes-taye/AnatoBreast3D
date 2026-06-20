@@ -17,6 +17,8 @@ model_data/
 runs/
 work_dirs/
 active_learning/dataset/
+active_learning/dataset_repeat*/
+active_learning/checkpoints/
 
 # local IDE/assistant settings
 .vscode/

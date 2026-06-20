@@ -374,6 +374,13 @@ class SurfaceConfig:
 
 
 @dataclass(frozen=True)
+class VisualizationConfig:
+    """Browser/Rerun visualization payload controls."""
+
+    rerun_log_cameras: bool = False
+
+
+@dataclass(frozen=True)
 class PerceptionConfig:
     """Existing MammaSegNet adapter configuration.
 
@@ -413,6 +420,7 @@ class Recon3DConfig:
     cloud_cleanup: CloudCleanupConfig = field(default_factory=CloudCleanupConfig)
     fusion: FusionConfig = field(default_factory=FusionConfig)
     surface: SurfaceConfig = field(default_factory=SurfaceConfig)
+    visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     nipple3d: Nipple3DConfig = field(default_factory=Nipple3DConfig)
     output_dir: Path | None = None
     sync_max_drift_ms: float = 5.0
