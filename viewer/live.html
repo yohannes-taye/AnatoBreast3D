@@ -931,6 +931,7 @@ let lastTs = 0;
 let rerunMounted = false;
 let currentRerunUrl = "";
 let replaySessions = [];
+const REPLAY_SESSION_STORAGE_KEY = "recon3d.replaySession";
 
 window.liveReconState = { base: currentBase, cams: CAMS, manifest: null };
 dom.baseText.textContent = currentBase;
@@ -1046,7 +1047,7 @@ function setReplayUnavailable(message) {
   dom.replayMeta.textContent = message;
 }
 
-function renderReplaySessions(sessions) {
+function renderReplaySessions(sessions, preferredSessionId = null) {
   const previous = dom.replaySessionSelect.value;
   replaySessions = Array.isArray(sessions) ? sessions : [];
   dom.replaySessionSelect.innerHTML = "";
@@ -1064,8 +1065,10 @@ function renderReplaySessions(sessions) {
     option.textContent = `${session.name} | ${session.camera_count} cams | ${secondsText(session.duration_s)}`;
     dom.replaySessionSelect.append(option);
   }
-  if (previous && replaySessions.some((session) => session.id === previous)) {
-    dom.replaySessionSelect.value = previous;
+  const stored = localStorage.getItem(REPLAY_SESSION_STORAGE_KEY);
+  const preferred = preferredSessionId || previous || stored;
+  if (preferred && replaySessions.some((session) => session.id === preferred)) {
+    dom.replaySessionSelect.value = preferred;
   }
   dom.startReplayButton.disabled = false;
 }
@@ -1081,7 +1084,7 @@ function replaySessionSummary(session) {
 }
 
 function updateReplayUi(status) {
-  renderReplaySessions(status.sessions || []);
+  renderReplaySessions(status.sessions || [], status.session || null);
   const running = Boolean(status.running);
   dom.stopReplayButton.disabled = !running;
   if (running) {
@@ -1245,12 +1248,24 @@ dom.timelineToggle.addEventListener("click", () => {
 dom.startReplayButton.addEventListener("click", async () => {
   const session = dom.replaySessionSelect.value;
   if (!session) return;
+  localStorage.setItem(REPLAY_SESSION_STORAGE_KEY, session);
   dom.replayStatus.textContent = "starting";
   dom.replayMeta.textContent = session;
+  window.liveReconState.manifest = null;
+  lastTs = null;
+  renderCameraStrip({ cameras: [], perception: {} });
+  renderCameraFeeds({ cameras: [], perception: {}, rgb: {}, mask: {}, depth: {} });
+  dom.emptyDetail.textContent = "Waiting for stream";
   try {
     const status = await fetchJson("/api/replay/start", {
       method: "POST",
-      body: JSON.stringify({ session }),
+      body: JSON.stringify({
+        session,
+        rerun_web_port: 9111,
+        rerun_grpc_port: 9899,
+        probe_frames: 30,
+        wait_timeout_ms: 5000,
+      }),
     });
     updateReplayUi(status);
   } catch (error) {
@@ -1274,6 +1289,9 @@ dom.stopReplayButton.addEventListener("click", async () => {
 });
 
 dom.replaySessionSelect.addEventListener("change", () => {
+  if (dom.replaySessionSelect.value) {
+    localStorage.setItem(REPLAY_SESSION_STORAGE_KEY, dom.replaySessionSelect.value);
+  }
   if (dom.replayStatus.textContent !== "running") {
     dom.replayMeta.textContent = replaySessionSummary(selectedReplaySession());
   }

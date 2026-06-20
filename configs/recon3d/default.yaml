@@ -31,8 +31,8 @@ perception:
   model_config_path: configs/breastseg/breastseg_b2_inplace.py
   checkpoint_path: checkpoint/breastseg.pth
   device: cuda
-  score_thr: 0.3
-  topk: 2
+  score_thr: 0.1
+  topk: 5
   nms_iou: 0.5
 
 cloud_cleanup:

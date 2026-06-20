@@ -5,7 +5,12 @@ VOCdevkit/
 data/
 Medical_Datasets/
 lfw/
-logs/
+# Local runtime logs. Keep the folder README tracked, ignore generated files.
+logs/*
+!logs/
+!logs/README.md
+!logs/README.MD
+# Orbbec SDK may still auto-create this capitalized folder.
 Log/
 model_data/
 .temp_miou_out/

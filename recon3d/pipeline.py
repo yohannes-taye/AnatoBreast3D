@@ -213,8 +213,8 @@ class Recon3DPipeline:
                 raise RuntimeError(self._rerun_error)
             self._rr = rr
             self._rerun_url = (
-                f"http://localhost:{web_port}"
-                f"?url=rerun%2Bhttp://localhost:{grpc_port}/proxy"
+                f"http://127.0.0.1:{web_port}"
+                f"?url=rerun%2Bhttp://127.0.0.1:{grpc_port}/proxy"
             )
             LOGGER.info("Recon3D rerun stream started at %s", self._rerun_url)
         except Exception as exc:  # noqa: BLE001 - visualization must not break reconstruction

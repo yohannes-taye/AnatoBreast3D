@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import json
+import os
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib import request as urlrequest
 from urllib.parse import urlsplit
 import webbrowser
 
@@ -24,13 +26,92 @@ from active_learning.training import latest_status, launch_finetune  # noqa: E40
 
 DEFAULT_REPLAY_CONFIG = Path("configs") / "recon3d" / "default.yaml"
 DEFAULT_REPLAY_DATA_ROOT = Path("data") / "Replay"
-DEFAULT_REPLAY_WEB_PORT = 9091
-DEFAULT_REPLAY_GRPC_PORT = 9877
+DEFAULT_REPLAY_WEB_PORT = 9111
+DEFAULT_REPLAY_GRPC_PORT = 9899
+DEFAULT_REPLAY_PROBE_FRAMES = 30
+DEFAULT_CLEAN_PORTS = (8765, 9090, 9876, 9091, 9877, DEFAULT_REPLAY_WEB_PORT, DEFAULT_REPLAY_GRPC_PORT)
 
 _replay_lock = threading.Lock()
 _replay_proc: subprocess.Popen[bytes] | None = None
 _replay_log = None
 _replay_info: dict[str, object] = {}
+
+
+def _stop_viewer_managed_replay(host: str, ports: list[int]) -> None:
+    for port in ports:
+        url = f"http://{host}:{port}/api/replay/stop"
+        try:
+            req = urlrequest.Request(
+                url,
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urlrequest.urlopen(req, timeout=0.25):
+                pass
+        except Exception:
+            pass
+
+
+def _pid_matches_any_port(line: str, ports: set[int]) -> int | None:
+    parts = line.split()
+    if len(parts) < 5 or parts[0].upper() != "TCP":
+        return None
+    state = parts[3].upper()
+    if state not in {"LISTENING", "ESTABLISHED"}:
+        return None
+    try:
+        local_port = int(parts[1].rsplit(":", 1)[1])
+        pid = int(parts[-1])
+    except (IndexError, ValueError):
+        return None
+    if local_port not in ports or pid in {0, os.getpid()}:
+        return None
+    return pid
+
+
+def clean_existing_processes(host: str, port: int) -> list[int]:
+    ports = set(DEFAULT_CLEAN_PORTS)
+    ports.update(range(int(port), int(port) + 20))
+    ordered_ports = sorted(ports)
+    viewer_api_ports = sorted({int(port), 8765, 8766, 8767, 8768, 8769})
+    _stop_viewer_managed_replay(host, viewer_api_ports)
+    if os.name != "nt":
+        return []
+
+    try:
+        result = subprocess.run(  # noqa: S603 - netstat is a fixed diagnostic command
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    pids = {
+        pid
+        for line in result.stdout.splitlines()
+        for pid in [_pid_matches_any_port(line, ports)]
+        if pid is not None
+    }
+    stopped: list[int] = []
+    for pid in sorted(pids):
+        try:
+            subprocess.run(  # noqa: S603 - PID comes from local netstat for known dev ports
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+            stopped.append(pid)
+        except (OSError, subprocess.SubprocessError):
+            continue
+    if stopped:
+        time.sleep(0.5)
+    return stopped
 
 
 def _relative_id(path: Path, root: Path = ROOT) -> str:
@@ -196,7 +277,7 @@ def start_replay_process(project_root: Path, payload: dict[str, object]) -> dict
         "--rerun-grpc-port",
         str(int(payload.get("rerun_grpc_port") or DEFAULT_REPLAY_GRPC_PORT)),
         "--probe-frames",
-        str(int(payload.get("probe_frames") or 180)),
+        str(int(payload.get("probe_frames") or DEFAULT_REPLAY_PROBE_FRAMES)),
         "--wait-timeout-ms",
         str(int(payload.get("wait_timeout_ms") or 5000)),
     ]
@@ -325,9 +406,27 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open", action="store_true", help="Open the viewer in the default browser.")
+    parser.add_argument(
+        "--clean-existing",
+        dest="clean_existing",
+        action="store_true",
+        default=True,
+        help="Stop existing viewer/replay/Rerun processes on the development ports before binding.",
+    )
+    parser.add_argument(
+        "--no-clean-existing",
+        dest="clean_existing",
+        action="store_false",
+        help="Do not stop existing viewer/replay/Rerun processes before binding.",
+    )
     args = parser.parse_args()
 
     root = ROOT
+    if args.clean_existing:
+        stopped = clean_existing_processes(args.host, args.port)
+        if stopped:
+            print(f"Stopped existing viewer/replay processes: {', '.join(str(pid) for pid in stopped)}")
+
     server = None
     chosen_port = args.port
     for port in range(args.port, args.port + 20):

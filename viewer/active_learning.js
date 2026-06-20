@@ -3,7 +3,7 @@
 
   const live = window.liveReconState || {};
   const cams = live.cams || ["cam0", "cam1", "cam2"];
-  const base = live.base || "../runs/recon3d_live/";
+  const defaultBase = live.base || "../runs/recon3d_live/";
   const mount = document.getElementById("activeLearningMount");
   if (!mount) return;
 
@@ -19,6 +19,7 @@
     drawing: false,
     boxStart: null,
     draftBox: null,
+    frozen: null,
   };
 
   mount.innerHTML = `
@@ -113,6 +114,20 @@
 
   function currentManifest() {
     return (window.liveReconState && window.liveReconState.manifest) || null;
+  }
+
+  function currentBase() {
+    const liveBase = window.liveReconState && window.liveReconState.base;
+    const value = String(liveBase || defaultBase).replace(/\\/g, "/").replace(/\/+$/, "");
+    return value + "/";
+  }
+
+  function cloneManifest(man) {
+    try {
+      return JSON.parse(JSON.stringify(man));
+    } catch (err) {
+      return man;
+    }
   }
 
   function bust(man) {
@@ -290,28 +305,37 @@
   }
 
   async function openEditor() {
-    const man = currentManifest();
+    const man = cloneManifest(currentManifest());
     if (!man || !man.rgb || !man.rgb[state.cam]) {
       setStatus("no live frame");
       return;
     }
+    const frozenBase = currentBase();
+    const frozenCam = state.cam;
     const token = bust(man);
     setStatus("freezing frame");
-    state.image = await loadImage(base + man.rgb[state.cam] + token);
+    state.image = await loadImage(frozenBase + man.rgb[frozenCam] + token);
     ui.canvas.width = state.image.naturalWidth || state.image.width;
     ui.canvas.height = state.image.naturalHeight || state.image.height;
-    const maskPath = man.mask && man.mask[state.cam];
+    const maskPath = man.mask && man.mask[frozenCam];
     if (maskPath) {
-      await loadPredictionMask(base + maskPath + token, ui.canvas.width, ui.canvas.height);
+      await loadPredictionMask(frozenBase + maskPath + token, ui.canvas.width, ui.canvas.height);
     } else {
       state.maskCanvas.width = ui.canvas.width;
       state.maskCanvas.height = ui.canvas.height;
       state.maskCanvas.getContext("2d").clearRect(0, 0, ui.canvas.width, ui.canvas.height);
     }
-    state.boxes = initialBoxes(man, state.cam, ui.canvas.width, ui.canvas.height);
+    state.boxes = initialBoxes(man, frozenCam, ui.canvas.width, ui.canvas.height);
     state.undo = [];
     state.draftBox = null;
-    ui.modalMeta.textContent = `${state.cam} · frame ${man.frame}`;
+    state.frozen = {
+      base: frozenBase,
+      cam: frozenCam,
+      manifest: man,
+      frame: man.frame || 0,
+      timestamp: man.timestamp || Date.now() / 1000,
+    };
+    ui.modalMeta.textContent = `${frozenCam} · frame ${man.frame}`;
     ui.modal.hidden = false;
     setTool("add");
     setEditorStatus("ready");
@@ -347,20 +371,22 @@
 
   async function saveLabel() {
     if (!state.image) return;
-    const man = currentManifest() || {};
+    const frozen = state.frozen || {};
+    const man = frozen.manifest || currentManifest() || {};
+    const cam = frozen.cam || state.cam;
     setEditorStatus("saving");
     const payload = {
-      camera_id: state.cam,
-      frame: man.frame || 0,
-      timestamp: man.timestamp || Date.now() / 1000,
+      camera_id: cam,
+      frame: frozen.frame || man.frame || 0,
+      timestamp: frozen.timestamp || man.timestamp || Date.now() / 1000,
       image_png: imageDataUrl(),
       mask_png: maskDataUrl(),
       nipple_boxes_xyxy: state.boxes,
       source_manifest: {
-        frame: man.frame,
-        timestamp: man.timestamp,
-        perception: man.perception && man.perception[state.cam],
-        display: man.display && man.display[state.cam],
+        frame: frozen.frame || man.frame,
+        timestamp: frozen.timestamp || man.timestamp,
+        perception: man.perception && man.perception[cam],
+        display: man.display && man.display[cam],
       },
     };
     const res = await fetch("/api/active-learning/annotation", {
@@ -433,6 +459,7 @@
   ui.close.onclick = () => {
     ui.modal.hidden = true;
     state.image = null;
+    state.frozen = null;
   };
   ui.toolAdd.onclick = () => setTool("add");
   ui.toolErase.onclick = () => setTool("erase");

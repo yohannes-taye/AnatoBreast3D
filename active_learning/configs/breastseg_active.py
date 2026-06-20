@@ -43,7 +43,7 @@ CONFIG = {
         "period": 1,
     },
     "test": {
-        "score_thr": 0.3,
+        "score_thr": 0.1,
         "topk": 2,
         "nms_iou": 0.5,
     },
