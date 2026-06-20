@@ -225,6 +225,40 @@ def _translation_init_from_nipples(
     return delta
 
 
+def _anchor_translation_to_nipples(
+    delta: np.ndarray,
+    observations: list[NippleObservation],
+    nipples: Mapping[str, FusedNipple],
+) -> np.ndarray | None:
+    """Keep ICP's rotation but re-pin the translation onto the nipple consensus.
+
+    Surface ICP slides tangentially on the smooth breast and pulls the nipple off.
+    Rotation is well constrained by curvature, so we trust ICP for ``R`` and re-solve
+    the translation from the nipple landmark(s): ``t = mean(consensus - R @ obs)``.
+    The correction then fixes pose without moving the nipple. Return ``None`` when no
+    nipple anchor is available (caller keeps the raw ICP delta).
+    """
+    anchors = _valid_nipple_anchors(nipples)
+    rotation = np.asarray(delta[:3, :3], dtype=np.float64)
+    offsets: list[np.ndarray] = []
+    weights: list[float] = []
+    for obs in observations:
+        anchor = anchors.get(obs.side)
+        if anchor is None:
+            continue
+        offsets.append(anchor.mean_world_m - rotation @ obs.point_world_m)
+        weights.append(max(float(obs.confidence), 1e-3))
+    if not offsets:
+        return None
+    translation = np.average(
+        np.asarray(offsets, dtype=np.float64), axis=0, weights=np.asarray(weights, dtype=np.float64)
+    )
+    anchored = _identity()
+    anchored[:3, :3] = rotation
+    anchored[:3, 3] = translation
+    return anchored
+
+
 def _delta_passes_basic_gates(
     delta: np.ndarray,
     observations: list[NippleObservation],
@@ -310,18 +344,34 @@ class AnatomyRegistrationState:
         reference = config.reference_camera if config.reference_camera in camera_ids else (camera_ids[0] if camera_ids else None)
         diagnostics: dict[str, Any] = {
             "mode": config.mode,
-            "topology": "reference_star",
+            "topology": "leave_one_out_reference_gauge",
             "reference_camera": reference,
             "frame_index": self._frame_index,
             "cameras": {},
         }
 
-        target_cloud: o3d.geometry.PointCloud | None = None
-        if reference is not None and reference in clouds_cam and reference in extrinsics:
-            target_cloud = _downsample_for_icp(
-                _transform_cloud_cam_to_world(clouds_cam[reference], extrinsics[reference], _identity()),
+        # Per-camera leave-one-out targets: each camera registers against the merged
+        # full-breast surface of the OTHER cameras (full coverage, not a single view),
+        # using their current corrected positions. The reference stays fixed as gauge.
+        world_clouds: dict[str, o3d.geometry.PointCloud] = {}
+        for world_cam_id in camera_ids:
+            if world_cam_id not in clouds_cam or world_cam_id not in extrinsics:
+                continue
+            world_clouds[world_cam_id] = _downsample_for_icp(
+                _transform_cloud_cam_to_world(
+                    clouds_cam[world_cam_id],
+                    extrinsics[world_cam_id],
+                    self._states.get(world_cam_id, _CameraState()).smoothed_delta_world,
+                ),
                 config.icp_voxel_size_m,
             )
+
+        def _leave_one_out_target(exclude: str) -> o3d.geometry.PointCloud | None:
+            merged = o3d.geometry.PointCloud()
+            for other_id, other_cloud in world_clouds.items():
+                if other_id != exclude:
+                    merged += other_cloud
+            return merged if len(merged.points) > 0 else None
 
         raw_deltas: dict[str, np.ndarray] = {}
         smoothed_deltas: dict[str, np.ndarray] = {}
@@ -347,7 +397,7 @@ class AnatomyRegistrationState:
                     extrinsics,
                     cam_obs,
                     nipples,
-                    target_cloud,
+                    _leave_one_out_target(cam_id),
                     reference,
                     state,
                     config,
@@ -494,6 +544,10 @@ class AnatomyRegistrationState:
             return nipple_init, "icp_high_rmse_fallback", {"enabled": True, "history": history, "accepted": False}
 
         icp_delta = current @ nipple_init
+        anchored_delta = _anchor_translation_to_nipples(icp_delta, cam_obs, nipples)
+        nipple_anchored = anchored_delta is not None
+        if nipple_anchored:
+            icp_delta = anchored_delta
         before_residual, _ = _nipple_residuals(cam_obs, nipples)
         icp_ok, icp_gate_reason, icp_residual = _delta_passes_basic_gates(
             icp_delta,
@@ -525,7 +579,11 @@ class AnatomyRegistrationState:
                 },
             )
 
-        return icp_delta, "icp_refined", {"enabled": True, "history": history, "accepted": True}
+        return (
+            icp_delta,
+            "icp_refined_nipple_anchored" if nipple_anchored else "icp_refined",
+            {"enabled": True, "history": history, "accepted": True, "nipple_anchored": nipple_anchored},
+        )
 
     def _gate_delta(
         self,

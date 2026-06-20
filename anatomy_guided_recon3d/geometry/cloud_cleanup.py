@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import open3d as o3d
 
-from anatomy_guided_recon3d.config import CloudCleanupConfig, DepthConfig, RGBDFrame
+from anatomy_guided_recon3d.config import CameraIntrinsics, CloudCleanupConfig, DepthConfig, RGBDFrame
 from anatomy_guided_recon3d.geometry.backproject import backproject_masked_depth, valid_depth_mask
 
 
@@ -30,6 +30,42 @@ def flying_depth_edges(depth_m: np.ndarray, valid: np.ndarray, threshold_m: floa
     return edges
 
 
+def grazing_edge_mask(
+    depth_m: np.ndarray,
+    intrinsics: CameraIntrinsics,
+    valid: np.ndarray,
+    max_angle_deg: float,
+) -> np.ndarray:
+    """Reject silhouette "comet-tail" flying pixels by surface-normal grazing angle.
+
+    Input shape/unit/frame: depth_m is HxW metres aligned to RGB; valid is HxW bool;
+    max_angle_deg is the largest allowed angle between the local surface normal and
+    the camera view ray (``>= 90`` disables). Mixed pixels at the silhouette ramp
+    gradually (so the single-jump edge test misses them) but their normals graze the
+    ray; pixels adjacent to invalid depth are also rejected (the mixed-pixel ring).
+    Return type: HxW bool where true means reject.
+    """
+    if max_angle_deg >= 90.0 or max_angle_deg <= 0.0:
+        return np.zeros_like(valid, dtype=bool)
+    height, width = depth_m.shape
+    z = np.where(valid, depth_m, np.nan).astype(np.float64)
+    us = (np.arange(width, dtype=np.float64) - float(intrinsics.cx)) / float(intrinsics.fx)
+    vs = (np.arange(height, dtype=np.float64) - float(intrinsics.cy)) / float(intrinsics.fy)
+    x = z * us[np.newaxis, :]
+    y = z * vs[:, np.newaxis]
+    dxu, dyu, dzu = np.gradient(x, axis=1), np.gradient(y, axis=1), np.gradient(z, axis=1)
+    dxv, dyv, dzv = np.gradient(x, axis=0), np.gradient(y, axis=0), np.gradient(z, axis=0)
+    nx = dyu * dzv - dzu * dyv
+    ny = dzu * dxv - dxu * dzv
+    nz = dxu * dyv - dyu * dxv
+    n_norm = np.sqrt(nx * nx + ny * ny + nz * nz)
+    p_norm = np.sqrt(x * x + y * y + z * z)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cos_angle = np.abs((nx * x + ny * y + nz * z) / (n_norm * p_norm))
+    cos_threshold = float(np.cos(np.radians(max_angle_deg)))
+    return valid & (~np.isfinite(cos_angle) | (cos_angle < cos_threshold))
+
+
 def cleanup_depth_config(frame_depth_config: DepthConfig, config: CloudCleanupConfig) -> DepthConfig:
     """Apply pipeline cleanup depth range while preserving SDK depth scale.
 
@@ -48,6 +84,7 @@ def cleaned_breast_mask(
     breast_mask: np.ndarray,
     depth_config: DepthConfig,
     config: CloudCleanupConfig,
+    intrinsics: CameraIntrinsics | None = None,
 ) -> np.ndarray:
     """Return the breast mask after erosion, depth range, and edge cleanup.
 
@@ -65,6 +102,10 @@ def cleaned_breast_mask(
     valid = valid_depth_mask(depth_raw, ranged_depth_config)
     depth_m = depth_raw.astype(np.float64) * ranged_depth_config.depth_scale_m
     edge_reject = flying_depth_edges(depth_m, valid, config.flying_depth_edge_threshold_m)
+    if intrinsics is not None:
+        edge_reject = edge_reject | grazing_edge_mask(
+            depth_m, intrinsics, valid, config.edge_grazing_max_angle_deg
+        )
     return mask & valid & ~edge_reject
 
 
@@ -79,7 +120,9 @@ def backproject_cleaned_breast_cloud(
     camera-frame metres with RGB colours.
     Return type: ``open3d.geometry.PointCloud``.
     """
-    cleaned_mask = cleaned_breast_mask(frame.depth_mm, breast_mask, frame.depth_config, config)
+    cleaned_mask = cleaned_breast_mask(
+        frame.depth_mm, breast_mask, frame.depth_config, config, frame.intrinsics
+    )
     return backproject_masked_depth(
         frame.depth_mm,
         cleaned_mask,

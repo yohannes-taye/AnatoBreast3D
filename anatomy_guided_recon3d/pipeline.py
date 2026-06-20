@@ -38,6 +38,8 @@ from anatomy_guided_recon3d.geometry.post_cleanup import cleanup_fused_cloud
 from anatomy_guided_recon3d.geometry.quality_metrics import (
     TemporalRepeatabilityTracker,
     compute_cross_camera_surface_consistency,
+    compute_nipple_pairwise_metrics,
+    export_colored_camera_ply,
 )
 from anatomy_guided_recon3d.geometry.surface import optional_poisson_surface_points
 from anatomy_guided_recon3d.geometry.tsdf_fusion import fuse_tsdf
@@ -151,6 +153,7 @@ class Recon3DPipeline:
         self._registration_state = AnatomyRegistrationState()
         self._repeatability_tracker = TemporalRepeatabilityTracker(config.quality_metrics)
         self._last_quality_metrics: dict[str, object] | None = None
+        self._last_alignment_metrics: dict[str, object] | None = None
 
     def _validate_frames(self, frames: Mapping[str, RGBDFrame]) -> int:
         if not frames:
@@ -216,6 +219,11 @@ class Recon3DPipeline:
                 json.dumps(self._last_quality_metrics, indent=2),
                 encoding="utf-8",
             )
+        if self._last_alignment_metrics is not None:
+            (out_dir / "alignment_metrics.json").write_text(
+                json.dumps(self._last_alignment_metrics, indent=2),
+                encoding="utf-8",
+            )
 
     def _write_summary(self, result: ReconstructionResult) -> None:
         out_dir = self.config.output_dir
@@ -243,6 +251,8 @@ class Recon3DPipeline:
             summary["tsdf_fusion"] = self._last_tsdf_fusion
         if self._last_quality_metrics is not None:
             summary["quality_metrics"] = self._last_quality_metrics
+        if self._last_alignment_metrics is not None:
+            summary["alignment_metrics"] = self._last_alignment_metrics
         (out_dir / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     def _ensure_rerun_stream(self, cam_ids: list[str]) -> None:
@@ -644,6 +654,33 @@ class Recon3DPipeline:
             "temporal_repeatability": self._repeatability_tracker.update(fused_cloud, nipples),
         }
         timings["quality_metrics_ms"] = _now_ms(start)
+
+        start = time.perf_counter()
+        alignment: dict[str, object] = {
+            "frame_index": self._frame_index,
+            "nipple_pairwise": compute_nipple_pairwise_metrics(
+                corrected_observations,
+                corrected_nipples,
+                self.config.quality_metrics.nipple_pairwise_gate_m,
+            ),
+            "surface_consistency": self._last_quality_metrics["surface_consistency"],
+        }
+        qcfg = self.config.quality_metrics
+        if (
+            qcfg.enabled
+            and qcfg.debug_ply_enabled
+            and self.config.output_dir is not None
+            and self._frame_index % max(1, qcfg.debug_ply_interval_frames) == 0
+        ):
+            self.config.output_dir.mkdir(parents=True, exist_ok=True)
+            alignment["debug_ply"] = export_colored_camera_ply(
+                clouds,
+                refined_extrinsics,
+                self.config.output_dir / "debug_cameras.ply",
+                qcfg,
+            )
+        self._last_alignment_metrics = alignment
+        timings["alignment_metrics_ms"] = _now_ms(start)
 
         start = time.perf_counter()
         result = ReconstructionResult(

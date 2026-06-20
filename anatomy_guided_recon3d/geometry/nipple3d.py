@@ -178,7 +178,11 @@ def estimate_observation_from_box(
     centroid = cluster.mean(axis=0)
     normal = _orient_normal_away_from_camera(_pca_normal(cluster), centroid)
     signed = (cluster - centroid) @ normal
-    candidate_cam = cluster[int(np.argmax(signed))]
+    apex_threshold = float(np.percentile(signed, 100.0 * (1.0 - cfg.nipple_apex_fraction)))
+    apex_points = cluster[signed >= apex_threshold]
+    if apex_points.shape[0] == 0:
+        apex_points = cluster[[int(np.argmax(signed))]]
+    candidate_cam = np.median(apex_points, axis=0)
     candidate_h = np.append(candidate_cam, 1.0)
     candidate_world = (extrinsic.T_world_cam @ candidate_h)[:3]
     cov_world, confidence = _candidate_covariance_world(

@@ -10,7 +10,20 @@ import open3d as o3d
 from anatomy_guided_recon3d.config import (
     CameraExtrinsics,
     FusedNipple,
+    NippleObservation,
     QualityMetricsConfig,
+)
+
+
+# Distinct RGB colours used to paint each camera's cloud in the debug PLY so
+# layering / double-walls between cameras are visible at a glance.
+_DEBUG_CAMERA_COLORS: tuple[tuple[float, float, float], ...] = (
+    (0.90, 0.12, 0.12),
+    (0.15, 0.70, 0.22),
+    (0.20, 0.45, 0.95),
+    (0.95, 0.75, 0.12),
+    (0.72, 0.20, 0.85),
+    (0.12, 0.80, 0.80),
 )
 
 
@@ -64,6 +77,8 @@ def _symmetric_surface_metrics(
     return {
         "rmse_m": float(np.sqrt(np.mean(np.square(distances)))),
         "mae_m": float(np.mean(distances)),
+        "p90_m": float(np.percentile(distances, 90)),
+        "p95_m": float(np.percentile(distances, 95)),
         "max_m": float(np.max(distances)),
         "overlap_points": int(distances.size),
         "overlap_ratio": float(
@@ -189,3 +204,98 @@ class TemporalRepeatabilityTracker:
             }
         diagnostics["nipple_repeatability"] = nipple_diag
         return diagnostics
+
+
+def compute_nipple_pairwise_metrics(
+    observations: list[NippleObservation],
+    nipples: Mapping[str, FusedNipple],
+    gate_m: float,
+) -> dict[str, Any]:
+    """Per-side multi-camera nipple agreement: the hard ``<= gate_m`` acceptance metric.
+
+    Input shape/unit/frame: ``observations`` are corrected world-frame nipple points
+    (one per camera per side); ``nipples`` is the corrected fused consensus.
+    Return type: per-side per-camera coords, max/mean pairwise distance, residual to
+    consensus, and pass/fail against ``gate_m`` (the multi-camera ``max pairwise``).
+    """
+    by_side: dict[str, dict[str, np.ndarray]] = {"left": {}, "right": {}}
+    for obs in observations:
+        if obs.side in by_side and np.isfinite(obs.point_world_m).all():
+            by_side[obs.side][obs.cam_id] = np.asarray(obs.point_world_m, dtype=np.float64)
+
+    result: dict[str, Any] = {"gate_m": float(gate_m)}
+    overall_max: float | None = None
+    overall_pass = True
+    for side in ("left", "right"):
+        cams = by_side[side]
+        cam_ids = sorted(cams)
+        pairs: list[dict[str, Any]] = []
+        max_pairwise: float | None = None
+        for i, cam_a in enumerate(cam_ids):
+            for cam_b in cam_ids[i + 1 :]:
+                distance = float(np.linalg.norm(cams[cam_a] - cams[cam_b]))
+                pairs.append({"pair": [cam_a, cam_b], "distance_m": distance})
+                max_pairwise = distance if max_pairwise is None else max(max_pairwise, distance)
+        entry: dict[str, Any] = {
+            "camera_count": len(cam_ids),
+            "cameras_m": {cam_id: cams[cam_id].tolist() for cam_id in cam_ids},
+            "pairwise": pairs,
+            "max_pairwise_m": max_pairwise,
+            "mean_pairwise_m": float(np.mean([p["distance_m"] for p in pairs])) if pairs else None,
+        }
+        nipple = nipples.get(side)
+        if nipple is not None and nipple.confidence > 0.0 and np.isfinite(nipple.mean_world_m).all():
+            consensus = np.asarray(nipple.mean_world_m, dtype=np.float64)
+            residuals = {cam_id: float(np.linalg.norm(cams[cam_id] - consensus)) for cam_id in cam_ids}
+            entry["consensus_m"] = consensus.tolist()
+            entry["residual_to_consensus_m"] = residuals
+            entry["max_residual_to_consensus_m"] = max(residuals.values()) if residuals else None
+        side_pass = max_pairwise is None or max_pairwise <= gate_m
+        entry["pass"] = bool(side_pass)
+        result[side] = entry
+        if max_pairwise is not None:
+            overall_max = max_pairwise if overall_max is None else max(overall_max, max_pairwise)
+            overall_pass = overall_pass and side_pass
+
+    result["left_max_pairwise_m"] = result["left"]["max_pairwise_m"]
+    result["right_max_pairwise_m"] = result["right"]["max_pairwise_m"]
+    result["max_pairwise_m"] = overall_max
+    result["pass"] = bool(overall_pass and overall_max is not None)
+    return result
+
+
+def export_colored_camera_ply(
+    clouds_cam: Mapping[str, o3d.geometry.PointCloud],
+    extrinsics: Mapping[str, CameraExtrinsics],
+    path: Any,
+    config: QualityMetricsConfig,
+) -> dict[str, Any]:
+    """Write one PLY with each camera's corrected world cloud painted a distinct colour.
+
+    Input shape/unit/frame: per-camera clouds are camera-frame metres; ``extrinsics``
+    are the corrected ``T_world_cam`` so layering between cameras is visible in world.
+    Return type: ``{written, path, points_per_camera, colors}``.
+    """
+    combined = o3d.geometry.PointCloud()
+    points_per_camera: dict[str, int] = {}
+    colors: dict[str, list[float]] = {}
+    for index, cam_id in enumerate(sorted(clouds_cam)):
+        cloud = clouds_cam[cam_id]
+        if cam_id not in extrinsics or len(cloud.points) == 0:
+            continue
+        world = copy.deepcopy(cloud)
+        world.transform(extrinsics[cam_id].T_world_cam)
+        color = _DEBUG_CAMERA_COLORS[index % len(_DEBUG_CAMERA_COLORS)]
+        world.paint_uniform_color(list(color))
+        combined += world
+        points_per_camera[cam_id] = len(world.points)
+        colors[cam_id] = list(color)
+    if len(combined.points) == 0:
+        return {"written": False, "reason": "empty", "points_per_camera": points_per_camera}
+    written = bool(o3d.io.write_point_cloud(str(path), combined))
+    return {
+        "written": written,
+        "path": str(path),
+        "points_per_camera": points_per_camera,
+        "colors": colors,
+    }

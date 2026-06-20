@@ -284,12 +284,15 @@ class Nipple3DConfig:
     covariance_jitter_m2: float = 1e-8
     left_right_axis_world: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0]))
     mahalanobis_threshold: float = 3.0
+    nipple_apex_fraction: float = 0.15
 
     def __post_init__(self) -> None:
         _validate_positive(self.dbscan_eps_m, "dbscan_eps_m")
         if self.min_cluster_points <= 0:
             raise ValueError("min_cluster_points must be positive")
         _validate_positive(self.covariance_jitter_m2, "covariance_jitter_m2")
+        if not 0.0 < self.nipple_apex_fraction <= 1.0:
+            raise ValueError("nipple_apex_fraction must be in (0, 1]")
         axis = _readonly_array(self.left_right_axis_world, shape=(3,), name="left_right_axis_world")
         norm = float(np.linalg.norm(axis))
         if norm <= 0:
@@ -330,6 +333,7 @@ class CloudCleanupConfig:
     flying_depth_edge_threshold_m: float = 0.015
     min_depth_m: float = 0.25
     max_depth_m: float = 1.2
+    edge_grazing_max_angle_deg: float = 80.0
 
     def __post_init__(self) -> None:
         if self.mask_erode_px < 0:
@@ -340,6 +344,8 @@ class CloudCleanupConfig:
         _validate_positive(self.max_depth_m, "max_depth_m")
         if self.max_depth_m <= self.min_depth_m:
             raise ValueError("max_depth_m must be greater than min_depth_m")
+        if not 0.0 <= self.edge_grazing_max_angle_deg <= 180.0:
+            raise ValueError("edge_grazing_max_angle_deg must be in [0, 180]")
 
 
 @dataclass(frozen=True)
@@ -497,16 +503,22 @@ class QualityMetricsConfig:
     min_points: int = 80
     max_points_per_cloud: int = 1500
     temporal_window: int = 30
+    nipple_pairwise_gate_m: float = 0.005
+    debug_ply_enabled: bool = False
+    debug_ply_interval_frames: int = 10
 
     def __post_init__(self) -> None:
         _validate_positive(self.surface_voxel_size_m, "surface_voxel_size_m")
         _validate_positive(self.surface_max_distance_m, "surface_max_distance_m")
+        _validate_positive(self.nipple_pairwise_gate_m, "nipple_pairwise_gate_m")
         if self.min_points <= 0:
             raise ValueError("min_points must be positive")
         if self.max_points_per_cloud <= 0:
             raise ValueError("max_points_per_cloud must be positive")
         if self.temporal_window <= 1:
             raise ValueError("temporal_window must be greater than 1")
+        if self.debug_ply_interval_frames < 1:
+            raise ValueError("debug_ply_interval_frames must be >= 1")
 
 
 @dataclass(frozen=True)

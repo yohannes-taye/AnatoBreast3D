@@ -93,6 +93,7 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
             flying_depth_edge_threshold_m=float(cleanup_raw.get("flying_depth_edge_threshold_m", 0.015)),
             min_depth_m=float(cleanup_raw.get("min_depth_m", 0.25)),
             max_depth_m=float(cleanup_raw.get("max_depth_m", 1.2)),
+            edge_grazing_max_angle_deg=float(cleanup_raw.get("edge_grazing_max_angle_deg", 80.0)),
         ),
         fusion=FusionConfig(
             voxel_size_m=float(fusion_raw.get("voxel_size_m", 0.002)),
@@ -118,6 +119,7 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
             covariance_jitter_m2=float(nipple_raw.get("covariance_jitter_m2", 1e-8)),
             left_right_axis_world=nipple_raw.get("left_right_axis_world", [1.0, 0.0, 0.0]),
             mahalanobis_threshold=float(nipple_raw.get("mahalanobis_threshold", 3.0)),
+            nipple_apex_fraction=float(nipple_raw.get("nipple_apex_fraction", 0.15)),
         ),
         nipple_guided_fusion=NippleGuidedFusionConfig(
             enabled=bool(nipple_guided_raw.get("enabled", True)),
@@ -180,6 +182,9 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
             min_points=int(quality_raw.get("min_points", 80)),
             max_points_per_cloud=int(quality_raw.get("max_points_per_cloud", 1500)),
             temporal_window=int(quality_raw.get("temporal_window", 30)),
+            nipple_pairwise_gate_m=float(quality_raw.get("nipple_pairwise_gate_m", 0.005)),
+            debug_ply_enabled=bool(quality_raw.get("debug_ply_enabled", False)),
+            debug_ply_interval_frames=int(quality_raw.get("debug_ply_interval_frames", 10)),
         ),
         output_dir=output_dir,
         sync_max_drift_ms=float(raw.get("sync_max_drift_ms", 5.0)),

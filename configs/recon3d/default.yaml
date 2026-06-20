@@ -36,10 +36,13 @@ perception:
   nms_iou: 0.5
 
 cloud_cleanup:
-  mask_erode_px: 4
+  mask_erode_px: 6
   flying_depth_edge_threshold_m: 0.015
   min_depth_m: 0.25
   max_depth_m: 1.2
+  # Reject silhouette flying pixels whose surface normal grazes the view ray
+  # (the per-camera edge "comet tails"); >= 90 disables.
+  edge_grazing_max_angle_deg: 80.0
 
 fusion:
   voxel_size_m: 0.002
@@ -71,6 +74,9 @@ nipple3d:
   # higher-Y side consistently left.
   left_right_axis_world: [0.0, -1.0, 0.0]
   mahalanobis_threshold: 3.0
+  # Robust nipple apex = median of the top protrusion fraction along the surface
+  # normal (not the single furthest pixel, which is noisy and disagrees per camera).
+  nipple_apex_fraction: 0.15
 
 nipple_guided_fusion:
   enabled: true
@@ -99,7 +105,7 @@ anatomy_registration:
   freeze_translation_epsilon_m: 0.001
   freeze_rotation_epsilon_deg: 0.25
   icp_voxel_size_m: 0.006
-  icp_correspondence_m: [0.05, 0.035, 0.025]
+  icp_correspondence_m: [0.025, 0.016, 0.010]
   icp_max_iterations_cold: 20
   icp_max_iterations_warm: 3
   icp_min_points: 250
@@ -136,3 +142,7 @@ quality_metrics:
   min_points: 80
   max_points_per_cloud: 1500
   temporal_window: 30
+  # Step 0 hard-metric diagnostics: multi-camera nipple pairwise gate + colored debug PLY.
+  nipple_pairwise_gate_m: 0.005
+  debug_ply_enabled: true
+  debug_ply_interval_frames: 5
