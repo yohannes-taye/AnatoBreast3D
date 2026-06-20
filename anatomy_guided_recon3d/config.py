@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -318,21 +318,41 @@ class FusionConfig:
 
 
 @dataclass(frozen=True)
-class NippleGuidedFusionConfig:
-    """Anatomy-guided multi-view mask and surface fusion parameters.
+class CloudCleanupConfig:
+    """Per-camera mask/depth cleanup before back-projection.
 
-    Input shape/unit/frame: distances are metres; mask erosion is pixels in the
-    aligned RGB/depth image. The nipple gate controls how far a per-view 3D
-    nipple observation may be from the fused anatomical anchor before the view is
-    down-weighted or rejected.
+    Input shape/unit/frame: erosion is pixels on the aligned RGB/depth grid;
+    depth edge threshold and depth range are metres in camera frame.
+    Return type: immutable dataclass.
+    """
+
+    mask_erode_px: int = 4
+    flying_depth_edge_threshold_m: float = 0.015
+    min_depth_m: float = 0.25
+    max_depth_m: float = 1.2
+
+    def __post_init__(self) -> None:
+        if self.mask_erode_px < 0:
+            raise ValueError("mask_erode_px must be non-negative")
+        if self.flying_depth_edge_threshold_m < 0:
+            raise ValueError("flying_depth_edge_threshold_m must be non-negative")
+        _validate_positive(self.min_depth_m, "min_depth_m")
+        _validate_positive(self.max_depth_m, "max_depth_m")
+        if self.max_depth_m <= self.min_depth_m:
+            raise ValueError("max_depth_m must be greater than min_depth_m")
+
+
+@dataclass(frozen=True)
+class NippleGuidedFusionConfig:
+    """Anatomy-guided multi-view fusion decisions.
+
+    Input shape/unit/frame: distances are metres. The nipple gate controls how
+    far a per-view 3D nipple observation may be from the fused anatomical anchor
+    before the view is down-weighted or rejected.
     Return type: immutable dataclass.
     """
 
     enabled: bool = True
-    mask_erode_px: int = 4
-    depth_edge_threshold_m: float = 0.015
-    depth_min_m: float = 0.25
-    depth_max_m: float = 1.2
     nipple_gate_m: float = 0.05
     reject_inconsistent_views: bool = True
     missing_nipple_weight: float = 0.55
@@ -341,13 +361,6 @@ class NippleGuidedFusionConfig:
     random_seed: int = 11
 
     def __post_init__(self) -> None:
-        if self.mask_erode_px < 0:
-            raise ValueError("mask_erode_px must be non-negative")
-        _validate_positive(self.depth_edge_threshold_m, "depth_edge_threshold_m")
-        _validate_positive(self.depth_min_m, "depth_min_m")
-        _validate_positive(self.depth_max_m, "depth_max_m")
-        if self.depth_max_m <= self.depth_min_m:
-            raise ValueError("depth_max_m must be greater than depth_min_m")
         _validate_positive(self.nipple_gate_m, "nipple_gate_m")
         for name in ("missing_nipple_weight", "min_consistent_weight"):
             value = float(getattr(self, name))
@@ -355,6 +368,44 @@ class NippleGuidedFusionConfig:
                 raise ValueError(f"{name} must be in [0, 1]")
         if self.min_accepted_views <= 0:
             raise ValueError("min_accepted_views must be positive")
+
+
+@dataclass(frozen=True)
+class SurfaceConfig:
+    """Optional world-frame surface smoothing after multi-camera fusion.
+
+    Input shape/unit/frame: normal search radius is metres; Poisson depth,
+    density trim quantile, and sample count are Open3D surface parameters.
+    Return type: immutable dataclass.
+    """
+
+    mesh_enabled: bool = False
+    poisson_depth: int = 8
+    density_trim_quantile: float = 0.1
+    sample_points: int = 80000
+    normal_radius_m: float = 0.01
+    normal_max_nn: int = 30
+    min_points: int = 500
+
+    def __post_init__(self) -> None:
+        if self.poisson_depth <= 0:
+            raise ValueError("poisson_depth must be positive")
+        if not (0.0 <= self.density_trim_quantile < 1.0):
+            raise ValueError("density_trim_quantile must be in [0, 1)")
+        if self.sample_points <= 0:
+            raise ValueError("sample_points must be positive")
+        _validate_positive(self.normal_radius_m, "normal_radius_m")
+        if self.normal_max_nn <= 0:
+            raise ValueError("normal_max_nn must be positive")
+        if self.min_points < 0:
+            raise ValueError("min_points must be non-negative")
+
+
+@dataclass(frozen=True)
+class VisualizationConfig:
+    """Browser/Rerun visualization payload controls."""
+
+    rerun_log_cameras: bool = False
 
 
 @dataclass(frozen=True)
@@ -394,11 +445,14 @@ class Recon3DConfig:
     """
 
     perception: PerceptionConfig = field(default_factory=PerceptionConfig)
+    cloud_cleanup: CloudCleanupConfig = field(default_factory=CloudCleanupConfig)
     fusion: FusionConfig = field(default_factory=FusionConfig)
+    surface: SurfaceConfig = field(default_factory=SurfaceConfig)
+    visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     nipple3d: Nipple3DConfig = field(default_factory=Nipple3DConfig)
     nipple_guided_fusion: NippleGuidedFusionConfig = field(default_factory=NippleGuidedFusionConfig)
     output_dir: Path | None = None
-    sync_max_drift_ms: float = 50
+    sync_max_drift_ms: float = 5.0
 
     def __post_init__(self) -> None:
         if self.output_dir is not None:

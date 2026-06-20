@@ -1,5 +1,5 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-"""Nipple-guided RGB-D multi-camera reconstruction package."""
+"""RGB-D multi-camera reconstruction package for MammaSegNet outputs."""
 
 
