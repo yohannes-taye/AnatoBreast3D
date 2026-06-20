@@ -58,7 +58,8 @@ surface:
 
 visualization:
   # Browser Cameras already streams RGB/depth previews from live_manifest outputs.
-  # Keep Rerun focused on fused 3D/timing unless 2D overlay debugging is needed.
+  # Keep Rerun focused on fused 3D/timing unless depth/mask/box debugging is needed.
+  # RGB camera previews are intentionally not sent to Rerun.
   rerun_log_cameras: false
 
 nipple3d:

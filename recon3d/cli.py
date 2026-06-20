@@ -1312,7 +1312,7 @@ def _add_visualization_args(parser: argparse.ArgumentParser) -> None:
         "--rerun-log-cameras",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Publish per-camera RGB/depth/2D overlays into Rerun; defaults to visualization.rerun_log_cameras.",
+        help="Publish per-camera depth/mask/box overlays into Rerun; RGB previews stay in the browser Cameras panel.",
     )
     parser.add_argument("--viewer-rgb-width", type=int, default=640, help="Width of RGB/mask preview images.")
 

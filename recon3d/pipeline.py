@@ -69,12 +69,11 @@ def _build_rerun_blueprint(rrb, cam_ids: list[str], log_cameras: bool):
             rrb.Spatial3DView(origin="world", name="Fused 3D"),
             collapse_panels=True,
         )
-    rgb_views = [rrb.Spatial2DView(origin=f"cams/{cam_id}", name=f"{cam_id} rgb") for cam_id in cam_ids]
     depth_views = [rrb.Spatial2DView(origin=f"depth/{cam_id}", name=f"{cam_id} depth") for cam_id in cam_ids]
     return rrb.Blueprint(
         rrb.Vertical(
             rrb.Spatial3DView(origin="world", name="Fused 3D"),
-            rrb.Grid(contents=rgb_views + depth_views, grid_columns=max(1, len(cam_ids))),
+            rrb.Grid(contents=depth_views, grid_columns=max(1, len(cam_ids))),
             row_shares=[2.0, 1.4],
         ),
         collapse_panels=True,
@@ -249,7 +248,6 @@ class Recon3DPipeline:
             for cam_id, frame in sorted(frames.items()):
                 perception = perceptions.get(cam_id)
                 depth_units_per_meter = 1.0 / frame.depth_config.depth_scale_m
-                rr.log(f"cams/{cam_id}/image", rr.Image(frame.rgb))
                 rr.log(
                     f"depth/{cam_id}",
                     rr.DepthImage(
