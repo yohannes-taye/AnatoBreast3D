@@ -199,6 +199,41 @@ The same viewer can start SDK bag replay from the Replay panel. It lists
 `data\Replay\*\session.json`, launches `python -m recon3d.cli replay --visualize`,
 and switches the displayed output to `runs\<bag_session>_replay`.
 
+### Anatomy-Guided Replay
+
+`anatomy_guided_recon3d` keeps the same replay/viewer contract as `recon3d`, but
+adds anatomy-aware registration before final fusion:
+
+```text
+perception -> nipple3d -> fused nipple anchors -> guided cloud decisions/weights
+  -> optional per-camera correction -> fusion -> final cleanup
+```
+
+The rollout mode is controlled only by `configs\recon3d\default.yaml`:
+
+```yaml
+anatomy_registration:
+  mode: nipple_init_robust_icp  # off | translation_only | nipple_init_robust_icp
+```
+
+Use the anatomy-guided CLI when testing real nipple alignment:
+
+```powershell
+python -m anatomy_guided_recon3d.cli replay --config configs\recon3d\default.yaml --bag-session data\Replay\orbbec_bag_720p_100s --out runs\orbbec_bag_720p_100s_anatomy_guided_replay --sync-diagnostics --probe-frames 180 --wait-timeout-ms 5000 --visualize
+```
+
+`post_fusion_cleanup` adds radius outlier removal and nipple-aware connected
+component retention after the existing voxel/statistical fusion cleanup. It keeps
+both breast-side components when they are large enough, close to corrected nipple
+anchors, or adjacent to already retained clusters. `tsdf_fusion` is present but
+off by default; enable it only after correction is stable.
+
+Additional anatomy-guided diagnostics are written next to `fused_breast.ply`:
+`nipple_guided_fusion.json`, `nipple_registration.json`, `final_cleanup.json`,
+`tsdf_fusion.json`, and `quality_metrics.json`. The quality metrics include
+cross-camera surface RMSE and rolling temporal repeatability so A/B runs do not
+depend only on nipple residuals.
+
 For a convenience wrapper around the same live command:
 
 ```powershell

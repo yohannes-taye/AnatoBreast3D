@@ -828,6 +828,13 @@
         </div>
         <div class="replay-controls">
           <div class="replay-field">
+            <label for="replayPipelineSelect">Pipeline</label>
+            <select class="replay-select" id="replayPipelineSelect" aria-label="Replay pipeline">
+              <option value="anatomy_guided_recon3d">Anatomy-guided Recon3D</option>
+              <option value="recon3d">Recon3D</option>
+            </select>
+          </div>
+          <div class="replay-field">
             <label for="replaySessionSelect">Bag session</label>
             <select class="replay-select" id="replaySessionSelect" aria-label="Replay bag session">
               <option value="">Loading data/Replay sessions...</option>
@@ -838,6 +845,27 @@
             <button class="tool-button danger" id="stopReplayButton" type="button">Stop</button>
           </div>
           <div class="replay-meta" id="replayMeta">--</div>
+        </div>
+      </section>
+
+      <section class="panel" id="liveRunPanel">
+        <div class="panel-head">
+          <b>Live</b>
+          <span id="liveRunStatus">idle</span>
+        </div>
+        <div class="replay-controls">
+          <div class="replay-field">
+            <label>Pipeline</label>
+            <select class="replay-select" id="livePipelineSelect" aria-label="Live pipeline">
+              <option value="anatomy_guided_recon3d">Anatomy-guided Recon3D</option>
+              <option value="recon3d">Recon3D</option>
+            </select>
+          </div>
+          <div class="replay-actions">
+            <button class="tool-button primary" id="startLiveButton" type="button">Run Live</button>
+            <button class="tool-button danger" id="stopLiveButton" type="button">Stop Live</button>
+          </div>
+          <div class="replay-meta" id="liveRunMeta">runs/anatomy_guided_recon3d_live</div>
         </div>
       </section>
     </aside>
@@ -908,10 +936,16 @@ const dom = {
   streamLabel: document.getElementById("streamLabel"),
   replayPanel: document.getElementById("replayPanel"),
   replayStatus: document.getElementById("replayStatus"),
+  replayPipelineSelect: document.getElementById("replayPipelineSelect"),
   replaySessionSelect: document.getElementById("replaySessionSelect"),
   startReplayButton: document.getElementById("startReplayButton"),
   stopReplayButton: document.getElementById("stopReplayButton"),
   replayMeta: document.getElementById("replayMeta"),
+  liveRunStatus: document.getElementById("liveRunStatus"),
+  livePipelineSelect: document.getElementById("livePipelineSelect"),
+  startLiveButton: document.getElementById("startLiveButton"),
+  stopLiveButton: document.getElementById("stopLiveButton"),
+  liveRunMeta: document.getElementById("liveRunMeta"),
   cameraStrip: document.getElementById("cameraStrip"),
   cameraFeedList: document.getElementById("cameraFeedList"),
   cameraCount: document.getElementById("cameraCount"),
@@ -931,7 +965,13 @@ let lastTs = 0;
 let rerunMounted = false;
 let currentRerunUrl = "";
 let replaySessions = [];
+let replayRunning = false;
+let replayHasSessions = false;
+let liveRunning = false;
 const REPLAY_SESSION_STORAGE_KEY = "recon3d.replaySession";
+const REPLAY_PIPELINE_STORAGE_KEY = "recon3d.replayPipeline";
+const DEFAULT_REPLAY_PIPELINE = "anatomy_guided_recon3d";
+const REPLAY_PROBE_FRAMES = 180;
 
 window.liveReconState = { base: currentBase, cams: CAMS, manifest: null };
 dom.baseText.textContent = currentBase;
@@ -1036,15 +1076,49 @@ async function fetchJson(url, options = {}) {
 
 function setReplayUnavailable(message) {
   replaySessions = [];
+  replayHasSessions = false;
+  dom.replayPipelineSelect.disabled = true;
   dom.replaySessionSelect.innerHTML = "";
   const option = document.createElement("option");
   option.value = "";
   option.textContent = "Replay API unavailable";
   dom.replaySessionSelect.append(option);
-  dom.startReplayButton.disabled = true;
-  dom.stopReplayButton.disabled = true;
+  syncRunControlState();
   dom.replayStatus.textContent = "offline";
   dom.replayMeta.textContent = message;
+}
+
+function syncRunControlState() {
+  dom.startReplayButton.disabled = !replayHasSessions || replayRunning || liveRunning;
+  dom.stopReplayButton.disabled = !replayRunning;
+  dom.replayPipelineSelect.disabled = replayRunning || liveRunning;
+  dom.replaySessionSelect.disabled = replayRunning || liveRunning || !replayHasSessions;
+  dom.livePipelineSelect.disabled = replayRunning || liveRunning;
+  dom.startLiveButton.disabled = replayRunning || liveRunning;
+  dom.stopLiveButton.disabled = !liveRunning;
+}
+
+function renderReplayPipelines(pipelines, preferredPipelineId = null) {
+  const previous = dom.replayPipelineSelect.value;
+  const choices = Array.isArray(pipelines) && pipelines.length
+    ? pipelines
+    : [
+        { id: "anatomy_guided_recon3d", label: "Anatomy-guided Recon3D" },
+        { id: "recon3d", label: "Recon3D" },
+      ];
+  dom.replayPipelineSelect.innerHTML = "";
+  for (const pipeline of choices) {
+    const option = document.createElement("option");
+    option.value = pipeline.id;
+    option.textContent = pipeline.label || pipeline.id;
+    dom.replayPipelineSelect.append(option);
+  }
+  const stored = localStorage.getItem(REPLAY_PIPELINE_STORAGE_KEY);
+  const preferred = preferredPipelineId || stored || previous || DEFAULT_REPLAY_PIPELINE;
+  if (preferred && choices.some((pipeline) => pipeline.id === preferred)) {
+    dom.replayPipelineSelect.value = preferred;
+  }
+  dom.replayPipelineSelect.disabled = false;
 }
 
 function renderReplaySessions(sessions, preferredSessionId = null) {
@@ -1052,13 +1126,15 @@ function renderReplaySessions(sessions, preferredSessionId = null) {
   replaySessions = Array.isArray(sessions) ? sessions : [];
   dom.replaySessionSelect.innerHTML = "";
   if (replaySessions.length === 0) {
+    replayHasSessions = false;
     const option = document.createElement("option");
     option.value = "";
     option.textContent = "No data/Replay sessions found";
     dom.replaySessionSelect.append(option);
-    dom.startReplayButton.disabled = true;
+    syncRunControlState();
     return;
   }
+  replayHasSessions = true;
   for (const session of replaySessions) {
     const option = document.createElement("option");
     option.value = session.id;
@@ -1070,7 +1146,7 @@ function renderReplaySessions(sessions, preferredSessionId = null) {
   if (preferred && replaySessions.some((session) => session.id === preferred)) {
     dom.replaySessionSelect.value = preferred;
   }
-  dom.startReplayButton.disabled = false;
+  syncRunControlState();
 }
 
 function selectedReplaySession() {
@@ -1080,16 +1156,18 @@ function selectedReplaySession() {
 function replaySessionSummary(session) {
   if (!session) return "Select a recorded SDK bag session from data/Replay.";
   const state = session.completed ? "complete" : "incomplete";
-  return `${session.camera_count} cameras | ${secondsText(session.duration_s)} | ${session.bag_size || "--"} | ${state}`;
+  const pipeline = dom.replayPipelineSelect.selectedOptions[0]?.textContent || "pipeline";
+  return `${pipeline} | ${session.camera_count} cameras | ${secondsText(session.duration_s)} | ${session.bag_size || "--"} | ${state}`;
 }
 
 function updateReplayUi(status) {
+  renderReplayPipelines(status.pipelines || [], status.pipeline || null);
   renderReplaySessions(status.sessions || [], status.session || null);
-  const running = Boolean(status.running);
-  dom.stopReplayButton.disabled = !running;
-  if (running) {
+  replayRunning = Boolean(status.running);
+  syncRunControlState();
+  if (replayRunning) {
     dom.replayStatus.textContent = "running";
-    dom.replayMeta.textContent = `${status.session_name || "replay"} -> ${status.output || "--"}`;
+    dom.replayMeta.textContent = `${status.pipeline_label || "Replay"} | ${status.session_name || "replay"} -> ${status.output || "--"}`;
     if (status.base) setViewerBase(status.base);
     return;
   }
@@ -1103,12 +1181,45 @@ function updateReplayUi(status) {
     status.sessions && status.sessions.length ? replaySessionSummary(selectedReplaySession()) : "No data/Replay/*/session.json found.";
 }
 
+function updateLiveUi(status) {
+  liveRunning = Boolean(status.running);
+  if (status.pipeline && [...dom.livePipelineSelect.options].some((option) => option.value === status.pipeline)) {
+    dom.livePipelineSelect.value = status.pipeline;
+  }
+  syncRunControlState();
+  if (liveRunning) {
+    dom.liveRunStatus.textContent = "running";
+    dom.liveRunMeta.textContent = `${status.pipeline_label || "Anatomy-guided Recon3D"} -> ${status.output || "--"}`;
+    if (status.base) setViewerBase(status.base);
+    return;
+  }
+  if (Number.isInteger(status.returncode)) {
+    dom.liveRunStatus.textContent = status.returncode === 0 ? "finished" : `failed ${status.returncode}`;
+    dom.liveRunMeta.textContent = status.log ? `log: ${status.log}` : "--";
+    return;
+  }
+  dom.liveRunStatus.textContent = "idle";
+  dom.liveRunMeta.textContent = status.output || "runs/anatomy_guided_recon3d_live";
+}
+
 async function refreshReplayStatus() {
   try {
     const status = await fetchJson("/api/replay/status");
     updateReplayUi(status);
   } catch (error) {
     setReplayUnavailable(error.message);
+  }
+}
+
+async function refreshLiveStatus() {
+  try {
+    const status = await fetchJson("/api/live/status");
+    updateLiveUi(status);
+  } catch (error) {
+    liveRunning = false;
+    syncRunControlState();
+    dom.liveRunStatus.textContent = "offline";
+    dom.liveRunMeta.textContent = error.message;
   }
 }
 
@@ -1247,10 +1358,12 @@ dom.timelineToggle.addEventListener("click", () => {
 
 dom.startReplayButton.addEventListener("click", async () => {
   const session = dom.replaySessionSelect.value;
+  const pipeline = dom.replayPipelineSelect.value || DEFAULT_REPLAY_PIPELINE;
   if (!session) return;
   localStorage.setItem(REPLAY_SESSION_STORAGE_KEY, session);
+  localStorage.setItem(REPLAY_PIPELINE_STORAGE_KEY, pipeline);
   dom.replayStatus.textContent = "starting";
-  dom.replayMeta.textContent = session;
+  dom.replayMeta.textContent = `${dom.replayPipelineSelect.selectedOptions[0]?.textContent || pipeline} | ${session}`;
   window.liveReconState.manifest = null;
   lastTs = null;
   renderCameraStrip({ cameras: [], perception: {} });
@@ -1261,9 +1374,10 @@ dom.startReplayButton.addEventListener("click", async () => {
       method: "POST",
       body: JSON.stringify({
         session,
+        pipeline,
         rerun_web_port: 9111,
         rerun_grpc_port: 9899,
-        probe_frames: 30,
+        probe_frames: REPLAY_PROBE_FRAMES,
         wait_timeout_ms: 5000,
       }),
     });
@@ -1288,6 +1402,46 @@ dom.stopReplayButton.addEventListener("click", async () => {
   }
 });
 
+dom.startLiveButton.addEventListener("click", async () => {
+  const pipeline = dom.livePipelineSelect.value || DEFAULT_REPLAY_PIPELINE;
+  dom.liveRunStatus.textContent = "starting";
+  dom.liveRunMeta.textContent = dom.livePipelineSelect.selectedOptions[0]?.textContent || pipeline;
+  window.liveReconState.manifest = null;
+  lastTs = null;
+  renderCameraStrip({ cameras: [], perception: {} });
+  renderCameraFeeds({ cameras: [], perception: {}, rgb: {}, mask: {}, depth: {} });
+  dom.emptyDetail.textContent = "Waiting for live stream";
+  try {
+    const status = await fetchJson("/api/live/start", {
+      method: "POST",
+      body: JSON.stringify({
+        pipeline,
+        rerun_web_port: 9090,
+        rerun_grpc_port: 9876,
+        sync_diagnostics: true,
+      }),
+    });
+    updateLiveUi(status);
+  } catch (error) {
+    dom.liveRunStatus.textContent = "failed";
+    dom.liveRunMeta.textContent = error.message;
+  }
+});
+
+dom.stopLiveButton.addEventListener("click", async () => {
+  dom.liveRunStatus.textContent = "stopping";
+  try {
+    const status = await fetchJson("/api/live/stop", {
+      method: "POST",
+      body: "{}",
+    });
+    updateLiveUi(status);
+  } catch (error) {
+    dom.liveRunStatus.textContent = "failed";
+    dom.liveRunMeta.textContent = error.message;
+  }
+});
+
 dom.replaySessionSelect.addEventListener("change", () => {
   if (dom.replaySessionSelect.value) {
     localStorage.setItem(REPLAY_SESSION_STORAGE_KEY, dom.replaySessionSelect.value);
@@ -1297,10 +1451,21 @@ dom.replaySessionSelect.addEventListener("change", () => {
   }
 });
 
+dom.replayPipelineSelect.addEventListener("change", () => {
+  if (dom.replayPipelineSelect.value) {
+    localStorage.setItem(REPLAY_PIPELINE_STORAGE_KEY, dom.replayPipelineSelect.value);
+  }
+  if (dom.replayStatus.textContent !== "running") {
+    dom.replayMeta.textContent = replaySessionSummary(selectedReplaySession());
+  }
+});
+
 renderCameraStrip({ cameras: CAMS, perception: {} });
 refreshReplayStatus();
+refreshLiveStatus();
 refresh();
 setInterval(refreshReplayStatus, 2000);
+setInterval(refreshLiveStatus, 2000);
 setInterval(refresh, 700);
 </script>
 <script src="active_learning.js"></script>

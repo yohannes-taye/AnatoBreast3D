@@ -169,3 +169,26 @@ def build_guided_cleaned_clouds(
         clouds[cam_id] = weighted
         point_counts[cam_id] = len(weighted.points)
     return clouds, point_counts
+
+
+def apply_guided_weights_to_clouds(
+    clouds: Mapping[str, o3d.geometry.PointCloud],
+    view_decisions: Mapping[str, Mapping[str, Any]],
+    guide_config: NippleGuidedFusionConfig,
+) -> tuple[dict[str, o3d.geometry.PointCloud], dict[str, int]]:
+    """Apply accepted/weight decisions to already back-projected camera clouds."""
+    weighted_clouds: dict[str, o3d.geometry.PointCloud] = {}
+    point_counts: dict[str, int] = {}
+    for cam_id, cloud in clouds.items():
+        decision = view_decisions.get(cam_id, {"accepted": True, "weight": 1.0})
+        if not bool(decision.get("accepted", True)):
+            point_counts[cam_id] = 0
+            continue
+        weighted = _subsample_cloud(
+            cloud,
+            float(decision.get("weight", 1.0)),
+            _stable_seed(cam_id, guide_config.random_seed),
+        )
+        weighted_clouds[cam_id] = weighted
+        point_counts[cam_id] = len(weighted.points)
+    return weighted_clouds, point_counts

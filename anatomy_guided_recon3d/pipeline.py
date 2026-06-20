@@ -18,17 +18,29 @@ from anatomy_guided_recon3d.config import (
     ReconstructionResult,
     RGBDFrame,
 )
+from anatomy_guided_recon3d.geometry.cloud_cleanup import backproject_cleaned_breast_cloud
 from anatomy_guided_recon3d.geometry.fusion import FusionBackend, PointCloudFusionBackend, point_cloud_bounds
 from anatomy_guided_recon3d.geometry.guided_fusion import (
-    build_guided_cleaned_clouds,
+    apply_guided_weights_to_clouds,
     make_nipple_guided_view_decisions,
 )
+from anatomy_guided_recon3d.geometry.nipple_registration import (
+    AnatomyRegistrationState,
+    filter_side_mismatched_observations,
+)
 from anatomy_guided_recon3d.geometry.nipple3d import (
+    assign_observation_sides,
     estimate_nipple_observations,
     fuse_nipple_observations,
     nipple_json_payload,
 )
+from anatomy_guided_recon3d.geometry.post_cleanup import cleanup_fused_cloud
+from anatomy_guided_recon3d.geometry.quality_metrics import (
+    TemporalRepeatabilityTracker,
+    compute_cross_camera_surface_consistency,
+)
 from anatomy_guided_recon3d.geometry.surface import optional_poisson_surface_points
+from anatomy_guided_recon3d.geometry.tsdf_fusion import fuse_tsdf
 from anatomy_guided_recon3d.perception.inference import BreastPerceptionAdapter
 from anatomy_guided_recon3d.sensors.rig import MultiFemtoBoltRig
 from anatomy_guided_recon3d.smoothing.temporal import OneEuroFilter3D
@@ -133,6 +145,12 @@ class Recon3DPipeline:
         self._rerun_error: str | None = None
         self._rerun_started = False
         self._last_nipple_guided_fusion: dict[str, object] | None = None
+        self._last_nipple_registration: dict[str, object] | None = None
+        self._last_final_cleanup: dict[str, object] | None = None
+        self._last_tsdf_fusion: dict[str, object] | None = None
+        self._registration_state = AnatomyRegistrationState()
+        self._repeatability_tracker = TemporalRepeatabilityTracker(config.quality_metrics)
+        self._last_quality_metrics: dict[str, object] | None = None
 
     def _validate_frames(self, frames: Mapping[str, RGBDFrame]) -> int:
         if not frames:
@@ -178,6 +196,26 @@ class Recon3DPipeline:
                 json.dumps(self._last_nipple_guided_fusion, indent=2),
                 encoding="utf-8",
             )
+        if self._last_nipple_registration is not None:
+            (out_dir / "nipple_registration.json").write_text(
+                json.dumps(self._last_nipple_registration, indent=2),
+                encoding="utf-8",
+            )
+        if self._last_final_cleanup is not None:
+            (out_dir / "final_cleanup.json").write_text(
+                json.dumps(self._last_final_cleanup, indent=2),
+                encoding="utf-8",
+            )
+        if self._last_tsdf_fusion is not None:
+            (out_dir / "tsdf_fusion.json").write_text(
+                json.dumps(self._last_tsdf_fusion, indent=2),
+                encoding="utf-8",
+            )
+        if self._last_quality_metrics is not None:
+            (out_dir / "quality_metrics.json").write_text(
+                json.dumps(self._last_quality_metrics, indent=2),
+                encoding="utf-8",
+            )
 
     def _write_summary(self, result: ReconstructionResult) -> None:
         out_dir = self.config.output_dir
@@ -197,6 +235,14 @@ class Recon3DPipeline:
         }
         if self._last_nipple_guided_fusion is not None:
             summary["nipple_guided_fusion"] = self._last_nipple_guided_fusion
+        if self._last_nipple_registration is not None:
+            summary["nipple_registration"] = self._last_nipple_registration
+        if self._last_final_cleanup is not None:
+            summary["final_cleanup"] = self._last_final_cleanup
+        if self._last_tsdf_fusion is not None:
+            summary["tsdf_fusion"] = self._last_tsdf_fusion
+        if self._last_quality_metrics is not None:
+            summary["quality_metrics"] = self._last_quality_metrics
         (out_dir / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     def _ensure_rerun_stream(self, cam_ids: list[str]) -> None:
@@ -390,6 +436,14 @@ class Recon3DPipeline:
         }
         if self._last_nipple_guided_fusion is not None:
             manifest["nipple_guided_fusion"] = self._last_nipple_guided_fusion
+        if self._last_nipple_registration is not None:
+            manifest["nipple_registration"] = self._last_nipple_registration
+        if self._last_final_cleanup is not None:
+            manifest["final_cleanup"] = self._last_final_cleanup
+        if self._last_tsdf_fusion is not None:
+            manifest["tsdf_fusion"] = self._last_tsdf_fusion
+        if self._last_quality_metrics is not None:
+            manifest["quality_metrics"] = self._last_quality_metrics
         if self._rerun_error:
             manifest["rerun_error"] = self._rerun_error
         (out_dir / "live_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
@@ -415,30 +469,80 @@ class Recon3DPipeline:
 
         start = time.perf_counter()
         observations = estimate_nipple_observations(frames, perceptions, self.extrinsics, self.config.nipple3d)
+        observations = assign_observation_sides(observations, self.config.nipple3d.left_right_axis_world)
         nipples = fuse_nipple_observations(observations, self.config.nipple3d)
         timings["nipple3d_ms"] = _now_ms(start)
 
         start = time.perf_counter()
-        view_decisions = make_nipple_guided_view_decisions(
-            list(frames.keys()),
-            observations,
-            nipples,
-            self.config.nipple_guided_fusion,
-        )
-        timings["guided_decisions_ms"] = _now_ms(start)
+        if self.config.anatomy_registration.mode == "off":
+            gated_observations = observations
+            side_gate = {"enabled": False, "reason": "registration_mode_off"}
+        else:
+            gated_observations, side_gate = filter_side_mismatched_observations(
+                observations,
+                nipples,
+                self.config.anatomy_registration,
+            )
+            if len(gated_observations) != len(observations):
+                nipples = fuse_nipple_observations(gated_observations, self.config.nipple3d)
+        timings["side_gate_ms"] = _now_ms(start)
 
         start = time.perf_counter()
-        clouds, guided_point_counts = build_guided_cleaned_clouds(
-            frames,
-            perceptions,
-            view_decisions,
-            self.config.cloud_cleanup,
-            self.config.nipple_guided_fusion,
-        )
+        clouds = {
+            cam_id: backproject_cleaned_breast_cloud(
+                frame,
+                perceptions[cam_id].breast_mask,
+                self.config.cloud_cleanup,
+            )
+            for cam_id, frame in frames.items()
+            if cam_id in perceptions
+        }
         timings["backproject_ms"] = _now_ms(start)
+
+        start = time.perf_counter()
+        refined_extrinsics, corrected_observations, corrected_nipples, registration_diag = self._registration_state.refine(
+            clouds,
+            self.extrinsics,
+            gated_observations,
+            nipples,
+            self.config.anatomy_registration,
+            self.config.nipple3d,
+        )
+        registration_diag["side_gate"] = side_gate
+        self._last_nipple_registration = registration_diag
+        timings["registration_ms"] = _now_ms(start)
+
+        start = time.perf_counter()
+        if self.config.anatomy_registration.mode == "off":
+            view_decisions = {
+                cam_id: {
+                    "accepted": True,
+                    "weight": 1.0,
+                    "reason": "registration_mode_off",
+                    "best_error_m": None,
+                    "observations": [],
+                }
+                for cam_id in frames
+            }
+            weighted_clouds = dict(clouds)
+            guided_point_counts = {cam_id: len(cloud.points) for cam_id, cloud in weighted_clouds.items()}
+        else:
+            view_decisions = make_nipple_guided_view_decisions(
+                list(frames.keys()),
+                corrected_observations,
+                corrected_nipples,
+                self.config.nipple_guided_fusion,
+            )
+            weighted_clouds, guided_point_counts = apply_guided_weights_to_clouds(
+                clouds,
+                view_decisions,
+                self.config.nipple_guided_fusion,
+            )
+        timings["guided_decisions_ms"] = _now_ms(start)
         self._last_nipple_guided_fusion = {
-            "enabled": bool(self.config.nipple_guided_fusion.enabled),
-            "fused_nipple_anchors": {
+            "enabled": self.config.anatomy_registration.mode != "off" and bool(self.config.nipple_guided_fusion.enabled),
+            "mode": self.config.anatomy_registration.mode,
+            "initial_fused_nipple_anchors": {
                 side: {
                     "mean_world_m": nipple.mean_world_m.tolist(),
                     "confidence": float(nipple.confidence),
@@ -447,25 +551,99 @@ class Recon3DPipeline:
                 }
                 for side, nipple in nipples.items()
             },
+            "corrected_fused_nipple_anchors": {
+                side: {
+                    "mean_world_m": nipple.mean_world_m.tolist(),
+                    "confidence": float(nipple.confidence),
+                    "used_cameras": list(nipple.used_cameras),
+                    "rejected_cameras": list(nipple.rejected_cameras),
+                }
+                for side, nipple in corrected_nipples.items()
+            },
             "view_decisions": view_decisions,
             "weighted_point_counts": guided_point_counts,
         }
 
         start = time.perf_counter()
-        fused_cloud = self.fusion_backend.fuse(clouds, self.extrinsics)
+        self._last_tsdf_fusion = {
+            "enabled": bool(self.config.tsdf_fusion.enabled),
+            "source": "pointcloud",
+        }
+        if self.config.tsdf_fusion.enabled:
+            tsdf_frames = {
+                cam_id: frame
+                for cam_id, frame in frames.items()
+                if bool(view_decisions.get(cam_id, {}).get("accepted", False))
+                and float(view_decisions.get(cam_id, {}).get("weight", 0.0) or 0.0) > 0.0
+            }
+            tsdf_perceptions = {
+                cam_id: perceptions[cam_id]
+                for cam_id in tsdf_frames
+                if cam_id in perceptions
+            }
+            tsdf_extrinsics = {
+                cam_id: refined_extrinsics[cam_id]
+                for cam_id in tsdf_frames
+                if cam_id in refined_extrinsics
+            }
+            tsdf_cloud, tsdf_diag = fuse_tsdf(
+                tsdf_frames,
+                tsdf_perceptions,
+                tsdf_extrinsics,
+                self.config.cloud_cleanup,
+                self.config.tsdf_fusion,
+            )
+            tsdf_diag["skipped_by_guided_decision"] = [
+                cam_id
+                for cam_id in sorted(frames)
+                if cam_id not in tsdf_frames
+            ]
+            if len(tsdf_cloud.points):
+                fused_cloud = tsdf_cloud
+                tsdf_diag["source"] = "tsdf"
+            else:
+                fused_cloud = self.fusion_backend.fuse(weighted_clouds, refined_extrinsics)
+                tsdf_diag["source"] = "pointcloud_fallback"
+            self._last_tsdf_fusion = tsdf_diag
+        else:
+            fused_cloud = self.fusion_backend.fuse(weighted_clouds, refined_extrinsics)
         timings["fusion_ms"] = _now_ms(start)
 
         start = time.perf_counter()
+        fused_cloud, cleanup_diag = cleanup_fused_cloud(
+            fused_cloud,
+            corrected_nipples,
+            self.config.post_fusion_cleanup,
+        )
+        self._last_final_cleanup = cleanup_diag
+        timings["post_cleanup_ms"] = _now_ms(start)
+
+        start = time.perf_counter()
+        camera_centers_world_m = [
+            extrinsic.T_world_cam[:3, 3]
+            for extrinsic in refined_extrinsics.values()
+        ]
         fused_cloud = optional_poisson_surface_points(
             fused_cloud,
-            self._camera_centers_world_m,
+            camera_centers_world_m,
             self.config.surface,
         )
         timings["surface_ms"] = _now_ms(start)
 
         start = time.perf_counter()
-        nipples = self._smooth_nipples(nipples, timestamp_ns)
+        nipples = self._smooth_nipples(corrected_nipples, timestamp_ns)
         timings["smoothing_ms"] = _now_ms(start)
+
+        start = time.perf_counter()
+        self._last_quality_metrics = {
+            "surface_consistency": compute_cross_camera_surface_consistency(
+                clouds,
+                refined_extrinsics,
+                self.config.quality_metrics,
+            ),
+            "temporal_repeatability": self._repeatability_tracker.update(fused_cloud, nipples),
+        }
+        timings["quality_metrics_ms"] = _now_ms(start)
 
         start = time.perf_counter()
         result = ReconstructionResult(

@@ -371,6 +371,145 @@ class NippleGuidedFusionConfig:
 
 
 @dataclass(frozen=True)
+class AnatomyRegistrationConfig:
+    """Online anatomy-guided extrinsic refinement.
+
+    Input shape/unit/frame: correction transforms are small world-frame
+    ``Delta T_world_cam`` updates composed before calibrated extrinsics.
+    Return type: immutable dataclass.
+    """
+
+    mode: Literal["off", "translation_only", "nipple_init_robust_icp"] = "nipple_init_robust_icp"
+    reference_camera: str | None = "cam1"
+    min_nipple_confidence: float = 0.15
+    side_gate_margin_m: float = 0.005
+    max_translation_m: float = 0.04
+    max_rotation_deg: float = 8.0
+    residual_improvement_ratio: float = 1.05
+    smooth_corrections: bool = True
+    correction_alpha: float = 0.35
+    freeze_after_frames: int = 20
+    recheck_interval_frames: int = 30
+    freeze_translation_epsilon_m: float = 0.001
+    freeze_rotation_epsilon_deg: float = 0.25
+    icp_voxel_size_m: float = 0.006
+    icp_correspondence_m: tuple[float, ...] = (0.05, 0.035, 0.025)
+    icp_max_iterations_cold: int = 20
+    icp_max_iterations_warm: int = 3
+    icp_min_points: int = 250
+    icp_min_fitness: float = 0.25
+    icp_max_rmse_m: float = 0.012
+    robust_kernel: Literal["none", "huber", "tukey"] = "tukey"
+    robust_kernel_k_m: float = 0.01
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"off", "translation_only", "nipple_init_robust_icp"}:
+            raise ValueError("mode must be off, translation_only, or nipple_init_robust_icp")
+        if not (0.0 <= self.min_nipple_confidence <= 1.0):
+            raise ValueError("min_nipple_confidence must be in [0, 1]")
+        if self.side_gate_margin_m < 0:
+            raise ValueError("side_gate_margin_m must be non-negative")
+        _validate_positive(self.max_translation_m, "max_translation_m")
+        _validate_positive(self.max_rotation_deg, "max_rotation_deg")
+        _validate_positive(self.residual_improvement_ratio, "residual_improvement_ratio")
+        if not (0.0 <= self.correction_alpha <= 1.0):
+            raise ValueError("correction_alpha must be in [0, 1]")
+        if self.freeze_after_frames < 0:
+            raise ValueError("freeze_after_frames must be non-negative")
+        if self.recheck_interval_frames <= 0:
+            raise ValueError("recheck_interval_frames must be positive")
+        _validate_positive(self.freeze_translation_epsilon_m, "freeze_translation_epsilon_m")
+        _validate_positive(self.freeze_rotation_epsilon_deg, "freeze_rotation_epsilon_deg")
+        _validate_positive(self.icp_voxel_size_m, "icp_voxel_size_m")
+        if not self.icp_correspondence_m:
+            raise ValueError("icp_correspondence_m must not be empty")
+        for value in self.icp_correspondence_m:
+            _validate_positive(float(value), "icp_correspondence_m")
+        if self.icp_max_iterations_cold <= 0 or self.icp_max_iterations_warm <= 0:
+            raise ValueError("icp max iterations must be positive")
+        if self.icp_min_points <= 0:
+            raise ValueError("icp_min_points must be positive")
+        if not (0.0 <= self.icp_min_fitness <= 1.0):
+            raise ValueError("icp_min_fitness must be in [0, 1]")
+        _validate_positive(self.icp_max_rmse_m, "icp_max_rmse_m")
+        if self.robust_kernel not in {"none", "huber", "tukey"}:
+            raise ValueError("robust_kernel must be none, huber, or tukey")
+        _validate_positive(self.robust_kernel_k_m, "robust_kernel_k_m")
+        object.__setattr__(self, "icp_correspondence_m", tuple(float(v) for v in self.icp_correspondence_m))
+
+
+@dataclass(frozen=True)
+class PostFusionCleanupConfig:
+    """Fused-cloud cleanup after transform/merge/voxel/statistical fusion."""
+
+    enabled: bool = True
+    radius_outlier_enabled: bool = True
+    radius_m: float = 0.012
+    min_neighbors: int = 8
+    min_retained_ratio: float = 0.25
+    dbscan_enabled: bool = True
+    dbscan_eps_m: float = 0.012
+    dbscan_min_points: int = 40
+    nipple_anchor_keep_radius_m: float = 0.035
+    min_cluster_points: int = 800
+    adjacency_distance_m: float = 0.02
+    preserve_nipple_clusters: bool = True
+
+    def __post_init__(self) -> None:
+        _validate_positive(self.radius_m, "radius_m")
+        if self.min_neighbors <= 0:
+            raise ValueError("min_neighbors must be positive")
+        if not (0.0 <= self.min_retained_ratio <= 1.0):
+            raise ValueError("min_retained_ratio must be in [0, 1]")
+        _validate_positive(self.dbscan_eps_m, "dbscan_eps_m")
+        if self.dbscan_min_points <= 0:
+            raise ValueError("dbscan_min_points must be positive")
+        _validate_positive(self.nipple_anchor_keep_radius_m, "nipple_anchor_keep_radius_m")
+        if self.min_cluster_points <= 0:
+            raise ValueError("min_cluster_points must be positive")
+        if self.adjacency_distance_m < 0:
+            raise ValueError("adjacency_distance_m must be non-negative")
+
+
+@dataclass(frozen=True)
+class TSDFConfig:
+    """Optional final-quality TSDF integration path."""
+
+    enabled: bool = False
+    voxel_length_m: float = 0.004
+    sdf_trunc_m: float = 0.025
+    depth_trunc_m: float = 1.2
+    color: bool = True
+
+    def __post_init__(self) -> None:
+        _validate_positive(self.voxel_length_m, "voxel_length_m")
+        _validate_positive(self.sdf_trunc_m, "sdf_trunc_m")
+        _validate_positive(self.depth_trunc_m, "depth_trunc_m")
+
+
+@dataclass(frozen=True)
+class QualityMetricsConfig:
+    """Objective online diagnostics for A/B reconstruction comparisons."""
+
+    enabled: bool = True
+    surface_voxel_size_m: float = 0.008
+    surface_max_distance_m: float = 0.025
+    min_points: int = 80
+    max_points_per_cloud: int = 1500
+    temporal_window: int = 30
+
+    def __post_init__(self) -> None:
+        _validate_positive(self.surface_voxel_size_m, "surface_voxel_size_m")
+        _validate_positive(self.surface_max_distance_m, "surface_max_distance_m")
+        if self.min_points <= 0:
+            raise ValueError("min_points must be positive")
+        if self.max_points_per_cloud <= 0:
+            raise ValueError("max_points_per_cloud must be positive")
+        if self.temporal_window <= 1:
+            raise ValueError("temporal_window must be greater than 1")
+
+
+@dataclass(frozen=True)
 class SurfaceConfig:
     """Optional world-frame surface smoothing after multi-camera fusion.
 
@@ -451,6 +590,10 @@ class Recon3DConfig:
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     nipple3d: Nipple3DConfig = field(default_factory=Nipple3DConfig)
     nipple_guided_fusion: NippleGuidedFusionConfig = field(default_factory=NippleGuidedFusionConfig)
+    anatomy_registration: AnatomyRegistrationConfig = field(default_factory=AnatomyRegistrationConfig)
+    post_fusion_cleanup: PostFusionCleanupConfig = field(default_factory=PostFusionCleanupConfig)
+    tsdf_fusion: TSDFConfig = field(default_factory=TSDFConfig)
+    quality_metrics: QualityMetricsConfig = field(default_factory=QualityMetricsConfig)
     output_dir: Path | None = None
     sync_max_drift_ms: float = 5.0
 

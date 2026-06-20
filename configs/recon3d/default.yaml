@@ -66,5 +66,73 @@ nipple3d:
   dbscan_eps_m: 0.005
   min_cluster_points: 30
   covariance_jitter_m2: 1.0e-8
-  left_right_axis_world: [1.0, 0.0, 0.0]
+  # In the current calibrated rig the two nipples separate mostly along world Y.
+  # The assignment helper maps smaller projection to "left", so -Y makes the
+  # higher-Y side consistently left.
+  left_right_axis_world: [0.0, -1.0, 0.0]
   mahalanobis_threshold: 3.0
+
+nipple_guided_fusion:
+  enabled: true
+  nipple_gate_m: 0.05
+  reject_inconsistent_views: true
+  missing_nipple_weight: 0.55
+  min_consistent_weight: 0.35
+  min_accepted_views: 1
+  random_seed: 11
+
+anatomy_registration:
+  # Rollout modes: off -> translation_only -> nipple_init_robust_icp.
+  # Anatomy-guided runs use nipple anchors as initialization and robust ICP as
+  # the actual per-camera alignment correction.
+  mode: nipple_init_robust_icp
+  reference_camera: cam1
+  min_nipple_confidence: 0.15
+  side_gate_margin_m: 0.005
+  max_translation_m: 0.04
+  max_rotation_deg: 8.0
+  residual_improvement_ratio: 1.05
+  smooth_corrections: true
+  correction_alpha: 0.35
+  freeze_after_frames: 20
+  recheck_interval_frames: 30
+  freeze_translation_epsilon_m: 0.001
+  freeze_rotation_epsilon_deg: 0.25
+  icp_voxel_size_m: 0.006
+  icp_correspondence_m: [0.05, 0.035, 0.025]
+  icp_max_iterations_cold: 20
+  icp_max_iterations_warm: 3
+  icp_min_points: 250
+  icp_min_fitness: 0.25
+  icp_max_rmse_m: 0.012
+  robust_kernel: tukey
+  robust_kernel_k_m: 0.01
+
+post_fusion_cleanup:
+  enabled: true
+  radius_outlier_enabled: true
+  radius_m: 0.012
+  min_neighbors: 8
+  min_retained_ratio: 0.25
+  dbscan_enabled: true
+  dbscan_eps_m: 0.012
+  dbscan_min_points: 40
+  nipple_anchor_keep_radius_m: 0.035
+  min_cluster_points: 800
+  adjacency_distance_m: 0.02
+  preserve_nipple_clusters: true
+
+tsdf_fusion:
+  enabled: false
+  voxel_length_m: 0.004
+  sdf_trunc_m: 0.025
+  depth_trunc_m: 1.2
+  color: true
+
+quality_metrics:
+  enabled: true
+  surface_voxel_size_m: 0.008
+  surface_max_distance_m: 0.025
+  min_points: 80
+  max_points_per_cloud: 1500
+  temporal_window: 30

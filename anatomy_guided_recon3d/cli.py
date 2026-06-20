@@ -22,13 +22,17 @@ from anatomy_guided_recon3d.calibration.charuco import (
 from anatomy_guided_recon3d.calibration.io import load_extrinsics, save_extrinsics
 from anatomy_guided_recon3d.config import (
     CameraExtrinsics,
+    AnatomyRegistrationConfig,
     CloudCleanupConfig,
     FusionConfig,
     Nipple3DConfig,
     NippleGuidedFusionConfig,
     PerceptionConfig,
+    PostFusionCleanupConfig,
+    QualityMetricsConfig,
     Recon3DConfig,
     SurfaceConfig,
+    TSDFConfig,
     VisualizationConfig,
 )
 from anatomy_guided_recon3d.pipeline import Recon3DPipeline
@@ -68,6 +72,10 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
     visualization_raw = raw.get("visualization", {})
     nipple_raw = raw.get("nipple3d", {})
     nipple_guided_raw = raw.get("nipple_guided_fusion", {})
+    registration_raw = raw.get("anatomy_registration", {})
+    post_cleanup_raw = raw.get("post_fusion_cleanup", {})
+    tsdf_raw = raw.get("tsdf_fusion", {})
+    quality_raw = raw.get("quality_metrics", {})
     output_dir = output_override or (Path(raw["output_dir"]) if raw.get("output_dir") else None)
     config = Recon3DConfig(
         perception=PerceptionConfig(
@@ -119,6 +127,59 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
             min_consistent_weight=float(nipple_guided_raw.get("min_consistent_weight", 0.35)),
             min_accepted_views=int(nipple_guided_raw.get("min_accepted_views", 1)),
             random_seed=int(nipple_guided_raw.get("random_seed", 11)),
+        ),
+        anatomy_registration=AnatomyRegistrationConfig(
+            mode=str(registration_raw.get("mode", "nipple_init_robust_icp")),
+            reference_camera=registration_raw.get("reference_camera", "cam1"),
+            min_nipple_confidence=float(registration_raw.get("min_nipple_confidence", 0.15)),
+            side_gate_margin_m=float(registration_raw.get("side_gate_margin_m", 0.005)),
+            max_translation_m=float(registration_raw.get("max_translation_m", 0.04)),
+            max_rotation_deg=float(registration_raw.get("max_rotation_deg", 8.0)),
+            residual_improvement_ratio=float(registration_raw.get("residual_improvement_ratio", 1.05)),
+            smooth_corrections=bool(registration_raw.get("smooth_corrections", True)),
+            correction_alpha=float(registration_raw.get("correction_alpha", 0.35)),
+            freeze_after_frames=int(registration_raw.get("freeze_after_frames", 20)),
+            recheck_interval_frames=int(registration_raw.get("recheck_interval_frames", 30)),
+            freeze_translation_epsilon_m=float(registration_raw.get("freeze_translation_epsilon_m", 0.001)),
+            freeze_rotation_epsilon_deg=float(registration_raw.get("freeze_rotation_epsilon_deg", 0.25)),
+            icp_voxel_size_m=float(registration_raw.get("icp_voxel_size_m", 0.006)),
+            icp_correspondence_m=tuple(registration_raw.get("icp_correspondence_m", [0.05, 0.035, 0.025])),
+            icp_max_iterations_cold=int(registration_raw.get("icp_max_iterations_cold", 20)),
+            icp_max_iterations_warm=int(registration_raw.get("icp_max_iterations_warm", 3)),
+            icp_min_points=int(registration_raw.get("icp_min_points", 250)),
+            icp_min_fitness=float(registration_raw.get("icp_min_fitness", 0.25)),
+            icp_max_rmse_m=float(registration_raw.get("icp_max_rmse_m", 0.012)),
+            robust_kernel=str(registration_raw.get("robust_kernel", "tukey")),
+            robust_kernel_k_m=float(registration_raw.get("robust_kernel_k_m", 0.01)),
+        ),
+        post_fusion_cleanup=PostFusionCleanupConfig(
+            enabled=bool(post_cleanup_raw.get("enabled", True)),
+            radius_outlier_enabled=bool(post_cleanup_raw.get("radius_outlier_enabled", True)),
+            radius_m=float(post_cleanup_raw.get("radius_m", 0.012)),
+            min_neighbors=int(post_cleanup_raw.get("min_neighbors", 8)),
+            min_retained_ratio=float(post_cleanup_raw.get("min_retained_ratio", 0.25)),
+            dbscan_enabled=bool(post_cleanup_raw.get("dbscan_enabled", True)),
+            dbscan_eps_m=float(post_cleanup_raw.get("dbscan_eps_m", 0.012)),
+            dbscan_min_points=int(post_cleanup_raw.get("dbscan_min_points", 40)),
+            nipple_anchor_keep_radius_m=float(post_cleanup_raw.get("nipple_anchor_keep_radius_m", 0.035)),
+            min_cluster_points=int(post_cleanup_raw.get("min_cluster_points", 800)),
+            adjacency_distance_m=float(post_cleanup_raw.get("adjacency_distance_m", 0.02)),
+            preserve_nipple_clusters=bool(post_cleanup_raw.get("preserve_nipple_clusters", True)),
+        ),
+        tsdf_fusion=TSDFConfig(
+            enabled=bool(tsdf_raw.get("enabled", False)),
+            voxel_length_m=float(tsdf_raw.get("voxel_length_m", 0.004)),
+            sdf_trunc_m=float(tsdf_raw.get("sdf_trunc_m", 0.025)),
+            depth_trunc_m=float(tsdf_raw.get("depth_trunc_m", 1.2)),
+            color=bool(tsdf_raw.get("color", True)),
+        ),
+        quality_metrics=QualityMetricsConfig(
+            enabled=bool(quality_raw.get("enabled", True)),
+            surface_voxel_size_m=float(quality_raw.get("surface_voxel_size_m", 0.008)),
+            surface_max_distance_m=float(quality_raw.get("surface_max_distance_m", 0.025)),
+            min_points=int(quality_raw.get("min_points", 80)),
+            max_points_per_cloud=int(quality_raw.get("max_points_per_cloud", 1500)),
+            temporal_window=int(quality_raw.get("temporal_window", 30)),
         ),
         output_dir=output_dir,
         sync_max_drift_ms=float(raw.get("sync_max_drift_ms", 5.0)),
