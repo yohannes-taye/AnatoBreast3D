@@ -25,15 +25,15 @@
   mount.innerHTML = `
     <section class="al-card">
       <div class="al-head">
-        <div><b>Active Learning</b><span id="alSummary">loading</span></div>
+        <div><b>Segmentation Refinement</b><span id="alSummary">loading</span></div>
         <span class="al-badge" id="alState">ready</span>
       </div>
       <div class="al-tabs" id="alCamTabs"></div>
       <div class="al-actions">
-        <button class="primary" id="alAnnotate">Annotate</button>
-        <button class="warn" id="alFineTune">Fine-tune</button>
+        <button class="primary" id="alAnnotate">Refine Mask</button>
+        <button class="warn" id="alFineTune">Update AI</button>
       </div>
-      <div class="al-status" id="alStatus">dataset idle</div>
+      <div class="al-status" id="alStatus">review queue idle</div>
     </section>
   `;
 
@@ -42,7 +42,7 @@
       <div class="al-shell">
         <div class="al-top">
           <div class="al-title">
-            <b>Annotation Studio</b>
+            <b>Segmentation Review Studio</b>
             <span id="alModalMeta">no frame</span>
           </div>
           <button class="al-close" id="alClose">X</button>
@@ -51,9 +51,9 @@
           <div class="al-canvas-wrap"><canvas id="alCanvas"></canvas></div>
           <aside class="al-tools">
             <div class="al-tool-grid">
-              <button id="alToolAdd" class="active">Add</button>
+              <button id="alToolAdd" class="active">Paint</button>
               <button id="alToolErase">Erase</button>
-              <button id="alToolBox">Box</button>
+              <button id="alToolBox">Region</button>
               <button id="alUndo">Undo</button>
             </div>
             <div class="al-field">
@@ -61,16 +61,16 @@
               <input id="alBrush" type="range" min="4" max="90" step="2" value="24">
             </div>
             <div class="al-tool-grid">
-              <button id="alReset">Prediction</button>
+              <button id="alReset">Restore AI</button>
               <button id="alClear" class="al-danger">Clear</button>
-              <button id="alDeleteBox">Delete box</button>
+              <button id="alDeleteBox">Delete region</button>
               <button id="alInvert">Invert</button>
             </div>
             <div class="al-stat-line">
               <span id="alMaskStat">mask 0 px</span>
               <span id="alBoxStat">boxes 0</span>
             </div>
-            <button class="al-save" id="alSave">Save Label</button>
+            <button class="al-save" id="alSave">Save Review</button>
             <div class="al-muted" id="alEditorStatus">ready</div>
           </aside>
         </div>
@@ -161,9 +161,9 @@
     try {
       const res = await fetch("/api/active-learning/summary", { cache: "no-store" });
       const data = await res.json();
-      ui.summary.textContent = `${data.samples} samples · ${data.boxes} boxes`;
+      ui.summary.textContent = `${data.samples} reviews · ${data.boxes} regions`;
     } catch (err) {
-      ui.summary.textContent = "server offline";
+      ui.summary.textContent = "review service offline";
     }
   }
 
@@ -313,7 +313,7 @@
     const frozenBase = currentBase();
     const frozenCam = state.cam;
     const token = bust(man);
-    setStatus("freezing frame");
+    setStatus("capturing frame");
     state.image = await loadImage(frozenBase + man.rgb[frozenCam] + token);
     ui.canvas.width = state.image.naturalWidth || state.image.width;
     ui.canvas.height = state.image.naturalHeight || state.image.height;
@@ -340,7 +340,7 @@
     setTool("add");
     setEditorStatus("ready");
     renderEditor();
-    setStatus("frame frozen");
+    setStatus("ready for review");
   }
 
   function maskDataUrl() {
@@ -374,7 +374,7 @@
     const frozen = state.frozen || {};
     const man = frozen.manifest || currentManifest() || {};
     const cam = frozen.cam || state.cam;
-    setEditorStatus("saving");
+    setEditorStatus("saving review");
     const payload = {
       camera_id: cam,
       frame: frozen.frame || man.frame || 0,
@@ -397,13 +397,13 @@
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "save failed");
     setEditorStatus(`saved ${data.file_name}`);
-    setStatus(`${data.samples} samples · ${data.boxes} boxes`);
+    setStatus(`${data.samples} reviews · ${data.boxes} regions`);
     await refreshSummary();
   }
 
   async function fineTune() {
-    ui.state.textContent = "training";
-    setStatus("launching fine-tune");
+    ui.state.textContent = "updating";
+    setStatus("launching AI update");
     const res = await fetch("/api/active-learning/fine-tune", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -415,7 +415,7 @@
       setStatus(data.message || data.error || "not started");
       return;
     }
-    setStatus(`training pid ${data.pid}`);
+    setStatus(`AI update pid ${data.pid}`);
   }
 
   ui.canvas.addEventListener("pointerdown", (event) => {

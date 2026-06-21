@@ -567,7 +567,7 @@ def make_server(host: str, port: int, root: Path) -> ThreadingHTTPServer:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Serve the Recon3D browser viewer.")
+    parser = argparse.ArgumentParser(description="Serve the AnatoBreast3D browser viewer.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--open", action="store_true", help="Open the viewer in the default browser.")
@@ -605,7 +605,7 @@ def main() -> None:
         raise SystemExit(f"No free port found from {args.port} to {args.port + 19}")
 
     url = f"http://{args.host}:{chosen_port}/viewer/live.html"
-    print(f"Serving Recon3D viewer at {url}")
+    print(f"Serving AnatoBreast3D Viewer at {url}")
     print("Press Ctrl+C to stop.")
     if args.open:
         webbrowser.open(url)

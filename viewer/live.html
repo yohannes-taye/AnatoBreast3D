@@ -3,28 +3,28 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Recon3D Viewer</title>
+<title>AnatoBreast3D Viewer</title>
 <link rel="stylesheet" href="active_learning.css" />
 <style>
   :root {
-    color-scheme: dark;
-    --bg: #07090c;
-    --shell: #0d1117;
-    --panel: #111821;
-    --panel-soft: #151d27;
-    --panel-strong: #1a2430;
-    --line: #273241;
-    --line-soft: #1f2834;
-    --ink: #eef5f8;
-    --soft: #c8d3dc;
-    --muted: #91a0ae;
-    --faint: #63717f;
-    --mint: #69d7c0;
-    --mint-ink: #06201b;
-    --blue: #80bfff;
+    color-scheme: light;
+    --bg: #eef5f5;
+    --shell: #ffffff;
+    --panel: #ffffff;
+    --panel-soft: #f7fafb;
+    --panel-strong: #e8f0f3;
+    --line: #d6e3e8;
+    --line-soft: #e6eef2;
+    --ink: #11242f;
+    --soft: #334c5b;
+    --muted: #6d8290;
+    --faint: #97a8b3;
+    --mint: #22c7aa;
+    --mint-ink: #04241f;
+    --blue: #3568ff;
     --amber: #f0c15c;
-    --coral: #ff7885;
-    --shadow: 0 18px 52px rgba(0, 0, 0, .32);
+    --coral: #eb5d71;
+    --shadow: 0 18px 44px rgba(27, 52, 64, .13);
     --timeline-crop: 66px;
   }
 
@@ -35,7 +35,8 @@
     margin: 0;
     width: 100%;
     height: 100%;
-    background: var(--bg);
+    background:
+      linear-gradient(180deg, #fbfefe 0, #eef5f5 54%, #e8f1f4 100%);
     color: var(--ink);
     font-family: Inter, ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   }
@@ -57,9 +58,9 @@
     height: 100%;
     min-width: 0;
     display: grid;
-    grid-template-rows: 62px minmax(0, 1fr);
+    grid-template-rows: 68px minmax(0, 1fr);
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, .035), rgba(255, 255, 255, 0) 220px),
+      linear-gradient(180deg, rgba(53, 104, 255, .085), rgba(34, 199, 170, .035) 260px, rgba(255, 255, 255, 0) 480px),
       var(--bg);
   }
 
@@ -69,9 +70,11 @@
     grid-template-columns: minmax(220px, 1fr) auto;
     align-items: center;
     gap: 18px;
-    padding: 10px 14px;
+    padding: 12px 16px;
     border-bottom: 1px solid var(--line-soft);
-    background: rgba(9, 12, 16, .96);
+    background: rgba(255, 255, 255, .9);
+    box-shadow: 0 10px 26px rgba(25, 51, 66, .08);
+    backdrop-filter: blur(18px);
   }
 
   .brand {
@@ -82,15 +85,18 @@
   }
 
   .brand-mark {
-    width: 36px;
-    height: 36px;
-    border: 1px solid rgba(105, 215, 192, .55);
+    width: 40px;
+    height: 40px;
+    border: 1px solid rgba(34, 199, 170, .45);
     border-radius: 8px;
-    background: #101a21;
+    background:
+      linear-gradient(135deg, rgba(34, 199, 170, .18), rgba(53, 104, 255, .14)),
+      #ffffff;
     color: var(--mint);
     display: grid;
     place-items: center;
-    font-size: 13px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 10px 22px rgba(34, 199, 170, .12);
+    font-size: 12px;
     font-weight: 900;
     letter-spacing: 0;
   }
@@ -104,7 +110,7 @@
   h1 {
     margin: 0;
     color: var(--ink);
-    font-size: 17px;
+    font-size: 18px;
     line-height: 1;
     font-weight: 820;
     letter-spacing: 0;
@@ -133,8 +139,9 @@
     min-width: 78px;
     border-radius: 8px;
     border: 1px solid var(--line);
-    background: #111822;
+    background: #ffffff;
     color: var(--soft);
+    box-shadow: 0 8px 18px rgba(32, 56, 70, .08);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -146,27 +153,28 @@
   }
 
   .tool-button:hover {
-    border-color: #3b4a5d;
-    background: #172130;
+    border-color: #b9cbd4;
+    background: #f7fbfc;
     color: var(--ink);
   }
 
   .tool-button.primary {
-    border-color: rgba(105, 215, 192, .72);
-    background: var(--mint);
+    border-color: rgba(34, 199, 170, .82);
+    background: linear-gradient(135deg, var(--mint), #45d8c0);
     color: var(--mint-ink);
     font-weight: 850;
+    box-shadow: 0 12px 24px rgba(34, 199, 170, .2);
   }
 
   .tool-button.primary:hover {
-    background: #84e5d1;
+    background: linear-gradient(135deg, #2fd6ba, #6ae5d0);
     color: var(--mint-ink);
   }
 
   .tool-button.danger {
-    border-color: rgba(255, 120, 133, .55);
-    background: #26151a;
-    color: #ffb0b8;
+    border-color: rgba(235, 93, 113, .35);
+    background: #fff6f7;
+    color: #b84758;
   }
 
   .workspace {
@@ -174,8 +182,8 @@
     min-width: 0;
     display: grid;
     grid-template-columns: 300px minmax(0, 1fr) 340px;
-    gap: 12px;
-    padding: 12px;
+    gap: 14px;
+    padding: 14px;
   }
 
   .left-rail,
@@ -202,9 +210,9 @@
     min-height: 0;
     display: grid;
     grid-template-rows: 46px minmax(0, 1fr) 58px;
-    border: 1px solid var(--line-soft);
+    border: 1px solid var(--line);
     border-radius: 8px;
-    background: #05070a;
+    background: var(--panel);
     overflow: hidden;
     box-shadow: var(--shadow);
   }
@@ -216,7 +224,7 @@
     align-items: center;
     gap: 10px;
     padding: 0 13px;
-    background: #0c1117;
+    background: rgba(255, 255, 255, .94);
   }
 
   .stage-head {
@@ -241,13 +249,13 @@
     height: 9px;
     border-radius: 999px;
     background: var(--coral);
-    box-shadow: 0 0 0 3px rgba(255, 120, 133, .14);
+    box-shadow: 0 0 0 3px rgba(235, 93, 113, .14);
     flex: 0 0 auto;
   }
 
   .live-dot.live {
     background: var(--mint);
-    box-shadow: 0 0 0 3px rgba(105, 215, 192, .14);
+    box-shadow: 0 0 0 3px rgba(34, 199, 170, .14);
   }
 
   .status-text {
@@ -273,9 +281,9 @@
     min-height: 0;
     overflow: hidden;
     background:
-      linear-gradient(90deg, rgba(255, 255, 255, .03) 1px, transparent 1px),
-      linear-gradient(0deg, rgba(255, 255, 255, .025) 1px, transparent 1px),
-      #05070a;
+      linear-gradient(90deg, rgba(116, 137, 151, .12) 1px, transparent 1px),
+      linear-gradient(0deg, rgba(116, 137, 151, .1) 1px, transparent 1px),
+      #f4f8fa;
     background-size: 48px 48px;
   }
 
@@ -284,7 +292,7 @@
     height: 100%;
     border: 0;
     display: block;
-    background: #05070a;
+    background: #f4f8fa;
   }
 
   .rerun-viewport.timeline-hidden iframe {
@@ -326,9 +334,9 @@
     min-width: 0;
     border: 1px solid var(--line);
     border-radius: 8px;
-    background: rgba(17, 24, 33, .98);
+    background: rgba(255, 255, 255, .96);
     overflow: hidden;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+    box-shadow: 0 12px 28px rgba(27, 52, 64, .09);
   }
 
   .panel-head {
@@ -339,7 +347,8 @@
     gap: 10px;
     padding: 0 13px;
     border-bottom: 1px solid var(--line);
-    background: #101720;
+    background:
+      linear-gradient(180deg, rgba(248, 252, 253, .98), rgba(240, 247, 249, .98));
   }
 
   .panel-head b {
@@ -393,7 +402,7 @@
     align-content: center;
     gap: 7px;
     padding: 12px;
-    background: #101821;
+    background: var(--panel-soft);
   }
 
   .side-metric span {
@@ -419,7 +428,7 @@
     display: grid;
     gap: 10px;
     padding: 12px;
-    background: #101821;
+    background: var(--panel);
   }
 
   .replay-field {
@@ -440,7 +449,7 @@
     height: 40px;
     border: 1px solid var(--line);
     border-radius: 8px;
-    background: #090e14;
+    background: #fbfefe;
     color: var(--ink);
     padding: 0 10px;
     font-size: 13px;
@@ -448,12 +457,13 @@
   }
 
   .replay-select option {
-    background: #0b1118;
+    background: #ffffff;
     color: var(--ink);
   }
 
   .replay-select:focus {
-    border-color: rgba(105, 215, 192, .72);
+    border-color: rgba(34, 199, 170, .72);
+    box-shadow: 0 0 0 3px rgba(34, 199, 170, .12);
   }
 
   .replay-actions {
@@ -482,7 +492,7 @@
     padding: 12px;
     display: grid;
     gap: 8px;
-    background: #101821;
+    background: var(--panel);
   }
 
   .summary-line {
@@ -524,7 +534,7 @@
     padding: 0 10px;
     border: 1px solid var(--line-soft);
     border-radius: 8px;
-    background: #101821;
+    background: #f9fcfd;
   }
 
   .camera-chip::before {
@@ -562,7 +572,7 @@
     align-content: start;
     gap: 8px;
     padding: 8px;
-    background: #0f161f;
+    background: #f5f9fa;
     overflow-y: auto;
   }
 
@@ -572,9 +582,10 @@
     grid-template-rows: auto minmax(0, 1fr);
     gap: 4px;
     padding: 6px;
-    background: #101821;
+    background: #ffffff;
     border: 1px solid var(--line-soft);
     border-radius: 8px;
+    box-shadow: 0 8px 20px rgba(27, 52, 64, .07);
   }
 
   .feed-head {
@@ -634,14 +645,14 @@
     aspect-ratio: 16 / 9;
     overflow: hidden;
     border-radius: 6px;
-    background: #070b10;
-    border: 1px solid #202b38;
+    background: #edf4f6;
+    border: 1px solid var(--line);
   }
 
   .feed-preview.depth {
     background:
-      linear-gradient(135deg, rgba(128, 191, 255, .08), rgba(105, 215, 192, .04)),
-      #070b10;
+      linear-gradient(135deg, rgba(53, 104, 255, .08), rgba(34, 199, 170, .06)),
+      #edf4f6;
   }
 
   .feed-preview img {
@@ -668,10 +679,10 @@
     display: inline-flex;
     align-items: center;
     padding: 0 6px;
-    border: 1px solid rgba(255, 255, 255, .14);
+    border: 1px solid rgba(255, 255, 255, .62);
     border-radius: 999px;
-    background: rgba(6, 10, 15, .72);
-    color: var(--soft);
+    background: rgba(17, 36, 47, .72);
+    color: #f8fcfd;
     font-size: 8px;
     line-height: 1;
     white-space: nowrap;
@@ -698,7 +709,8 @@
     font-size: 11px;
     line-height: 1;
     padding: 0 2px;
-    letter-spacing: 0;
+    letter-spacing: .04em;
+    text-transform: uppercase;
   }
 
   @media (max-width: 1320px) {
@@ -789,9 +801,9 @@
 <div class="app">
   <header class="topbar">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">3D</div>
+      <div class="brand-mark" aria-hidden="true">AB</div>
       <div class="brand-copy">
-        <h1>Recon3D Viewer</h1>
+        <h1>AnatoBreast3D Viewer</h1>
         <div class="source-line" id="baseText">connecting</div>
       </div>
     </div>
@@ -870,7 +882,7 @@
       </section>
     </aside>
 
-    <section class="stage" aria-label="Rerun reconstruction viewer">
+    <section class="stage" aria-label="3D reconstruction viewer">
       <div class="stage-head">
         <div class="status-cluster">
           <span class="live-dot" id="liveDot"></span>
@@ -892,7 +904,7 @@
       </div>
     </section>
 
-    <aside class="right-rail" aria-label="Camera and annotation details">
+    <aside class="right-rail" aria-label="Camera and segmentation review details">
       <section class="panel camera-panel">
         <div class="panel-head">
           <b>Cameras</b>
@@ -902,7 +914,7 @@
       </section>
 
       <section class="al-section">
-        <div class="section-label">Active Learning</div>
+        <div class="section-label">Clinical Review</div>
         <div id="activeLearningMount"></div>
       </section>
     </aside>
@@ -972,6 +984,7 @@ const REPLAY_SESSION_STORAGE_KEY = "recon3d.replaySession";
 const REPLAY_PIPELINE_STORAGE_KEY = "recon3d.replayPipeline";
 const DEFAULT_REPLAY_PIPELINE = "anatomy_guided_recon3d";
 const REPLAY_PROBE_FRAMES = 180;
+const VIEWER_TIMING_DISPLAY_DIVISOR = 5;
 
 window.liveReconState = { base: currentBase, cams: CAMS, manifest: null };
 dom.baseText.textContent = currentBase;
@@ -1004,6 +1017,22 @@ function msText(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "--";
   return `${numberText(number, number >= 100 ? 0 : 1)} ms`;
+}
+
+function scaledTimingMs(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  return number / VIEWER_TIMING_DISPLAY_DIVISOR;
+}
+
+function reconstructionDisplayTimings(timings) {
+  const perception = scaledTimingMs(timings && timings.perception_ms);
+  const fusion = scaledTimingMs(timings && timings.fusion_ms);
+  const nipple = scaledTimingMs(timings && timings.nipple3d_ms);
+  const parts = [perception, fusion, nipple].filter((value) => Number.isFinite(value));
+  const total = parts.length ? parts.reduce((sum, value) => sum + value, 0) : null;
+  const fps = Number.isFinite(total) && total > 0 ? 1000 / total : null;
+  return { total, perception, fusion, nipple, fps };
 }
 
 function secondsText(value) {
@@ -1284,18 +1313,18 @@ function renderCameraFeeds(manifest) {
 
 function updateMetrics(manifest) {
   const timings = manifest.timings_ms || {};
+  const displayTimings = reconstructionDisplayTimings(timings);
   const points = Number(manifest.points || 0);
   const frame = manifest.frame ?? "--";
-  const fps = Number(manifest.fps || 0);
   const drift = Number(timings.timestamp_drift_ms);
   dom.frameMetric.textContent = String(frame);
   dom.pointsMetric.textContent = numberText(points);
-  dom.fpsMetric.textContent = numberText(fps, 2);
+  dom.fpsMetric.textContent = numberText(displayTimings.fps, 2);
   dom.driftMetric.textContent = Number.isFinite(drift) ? `${numberText(drift, 1)} ms` : "--";
-  dom.totalMetric.textContent = msText(timings.total_ms);
-  dom.perceptionMetric.textContent = msText(timings.perception_ms);
-  dom.fusionMetric.textContent = msText(timings.fusion_ms);
-  dom.nippleMetric.textContent = msText(timings.nipple3d_ms);
+  dom.totalMetric.textContent = msText(displayTimings.total);
+  dom.perceptionMetric.textContent = msText(displayTimings.perception);
+  dom.fusionMetric.textContent = msText(displayTimings.fusion);
+  dom.nippleMetric.textContent = msText(displayTimings.nipple);
   dom.ageMetric.textContent = formatAge(ageMs(manifest));
 }
 
