@@ -61,6 +61,15 @@ visualization:
   # Keep Rerun focused on fused 3D/timing unless depth/mask/box debugging is needed.
   # RGB camera previews are intentionally not sent to Rerun.
   rerun_log_cameras: false
+  # Paint the fused breast cloud one uniform colour so per-camera exposure /
+  # white-balance differences don't show up as a multi-camera patchwork. Set to
+  # null to keep the original per-camera RGB.
+  uniform_breast_color: [0.85, 0.66, 0.58]
+  # Paint the areola + nipple (within areola_radius_m of each fused nipple anchor)
+  # one uniform colour too, so it is distinct from the body but doesn't show the
+  # per-camera colour patchwork. Set to null to keep the real per-camera RGB there.
+  uniform_areola_color: [0.58, 0.42, 0.40]
+  areola_radius_m: 0.02
 
 nipple3d:
   dbscan_eps_m: 0.005

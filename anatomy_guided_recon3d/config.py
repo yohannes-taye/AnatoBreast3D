@@ -545,6 +545,17 @@ class VisualizationConfig:
     """Browser/Rerun visualization payload controls."""
 
     rerun_log_cameras: bool = False
+    uniform_breast_color: tuple[float, float, float] | None = None
+    uniform_areola_color: tuple[float, float, float] | None = None
+    areola_radius_m: float = 0.02
+
+    def __post_init__(self) -> None:
+        for name in ("uniform_breast_color", "uniform_areola_color"):
+            color = getattr(self, name)
+            if color is not None and (len(color) != 3 or not all(0.0 <= float(c) <= 1.0 for c in color)):
+                raise ValueError(f"{name} must be 3 RGB floats in [0, 1]")
+        if self.areola_radius_m < 0.0:
+            raise ValueError("areola_radius_m must be non-negative")
 
 
 @dataclass(frozen=True)

@@ -630,6 +630,30 @@ class Recon3DPipeline:
         )
         timings["surface_ms"] = _now_ms(start)
 
+        # Unify per-camera colours: paint the fused breast body one flat colour so
+        # exposure/white-balance differences don't show as a patchwork, but keep the
+        # real RGB of the areola + nipple (near the fused nipple anchors) so they stay
+        # visible. Affects both the Rerun view and the written PLY.
+        uniform_color = self.config.visualization.uniform_breast_color
+        if uniform_color is not None and len(fused_cloud.points) > 0:
+            points = np.asarray(fused_cloud.points)
+            painted = np.tile(np.asarray(uniform_color, dtype=np.float64), (len(points), 1))
+            radius = float(self.config.visualization.areola_radius_m)
+            if radius > 0.0:
+                areola = np.zeros(len(points), dtype=bool)
+                for side in ("left", "right"):
+                    nipple = corrected_nipples.get(side)
+                    if nipple is not None and nipple.confidence > 0.0 and np.isfinite(nipple.mean_world_m).all():
+                        areola |= np.linalg.norm(points - np.asarray(nipple.mean_world_m), axis=1) <= radius
+                areola_color = self.config.visualization.uniform_areola_color
+                if areola_color is not None:
+                    painted[areola] = np.asarray(areola_color, dtype=np.float64)
+                else:
+                    real_colors = np.asarray(fused_cloud.colors)
+                    if real_colors.shape == painted.shape:
+                        painted[areola] = real_colors[areola]
+            fused_cloud.colors = o3d.utility.Vector3dVector(painted)
+
         start = time.perf_counter()
         nipples = self._smooth_nipples(corrected_nipples, timestamp_ns)
         timings["smoothing_ms"] = _now_ms(start)

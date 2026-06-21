@@ -111,6 +111,17 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
         ),
         visualization=VisualizationConfig(
             rerun_log_cameras=bool(visualization_raw.get("rerun_log_cameras", False)),
+            uniform_breast_color=(
+                tuple(float(c) for c in visualization_raw["uniform_breast_color"])
+                if visualization_raw.get("uniform_breast_color") is not None
+                else None
+            ),
+            uniform_areola_color=(
+                tuple(float(c) for c in visualization_raw["uniform_areola_color"])
+                if visualization_raw.get("uniform_areola_color") is not None
+                else None
+            ),
+            areola_radius_m=float(visualization_raw.get("areola_radius_m", 0.02)),
         ),
         nipple3d=Nipple3DConfig(
             dbscan_eps_m=float(nipple_raw.get("dbscan_eps_m", 0.005)),
