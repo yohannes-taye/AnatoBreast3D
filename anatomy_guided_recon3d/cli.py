@@ -91,6 +91,7 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
         cloud_cleanup=CloudCleanupConfig(
             mask_erode_px=int(cleanup_raw.get("mask_erode_px", 4)),
             flying_depth_edge_threshold_m=float(cleanup_raw.get("flying_depth_edge_threshold_m", 0.015)),
+            depth_gradient_threshold_m=float(cleanup_raw.get("depth_gradient_threshold_m", 0.0)),
             min_depth_m=float(cleanup_raw.get("min_depth_m", 0.25)),
             max_depth_m=float(cleanup_raw.get("max_depth_m", 1.2)),
         ),
@@ -126,6 +127,18 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
         nipple3d=Nipple3DConfig(
             dbscan_eps_m=float(nipple_raw.get("dbscan_eps_m", 0.005)),
             min_cluster_points=int(nipple_raw.get("min_cluster_points", 30)),
+            min_detector_score=float(nipple_raw.get("min_detector_score", 0.15)),
+            min_observation_confidence=float(nipple_raw.get("min_observation_confidence", 0.15)),
+            min_fused_observations=int(nipple_raw.get("min_fused_observations", 2)),
+            tip_top_fraction=float(nipple_raw.get("tip_top_fraction", 0.25)),
+            tip_min_points=int(nipple_raw.get("tip_min_points", 12)),
+            center_patch_fraction=float(nipple_raw.get("center_patch_fraction", 0.45)),
+            center_patch_min_points=int(nipple_raw.get("center_patch_min_points", 20)),
+            center_candidate_weight=float(nipple_raw.get("center_candidate_weight", 0.85)),
+            max_tip_center_distance_m=float(nipple_raw.get("max_tip_center_distance_m", 0.018)),
+            max_cluster_depth_mad_m=float(nipple_raw.get("max_cluster_depth_mad_m", 0.03)),
+            max_tip_signed_mad_m=float(nipple_raw.get("max_tip_signed_mad_m", 0.012)),
+            max_pairwise_nipple_distance_m=float(nipple_raw.get("max_pairwise_nipple_distance_m", 0.015)),
             covariance_jitter_m2=float(nipple_raw.get("covariance_jitter_m2", 1e-8)),
             left_right_axis_world=nipple_raw.get("left_right_axis_world", [1.0, 0.0, 0.0]),
             mahalanobis_threshold=float(nipple_raw.get("mahalanobis_threshold", 3.0)),
@@ -141,6 +154,7 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
         ),
         anatomy_registration=AnatomyRegistrationConfig(
             mode=str(registration_raw.get("mode", "nipple_init_robust_icp")),
+            registration_topology=str(registration_raw.get("registration_topology", "multiway")),
             reference_camera=registration_raw.get("reference_camera", "cam1"),
             min_nipple_confidence=float(registration_raw.get("min_nipple_confidence", 0.15)),
             side_gate_margin_m=float(registration_raw.get("side_gate_margin_m", 0.005)),
@@ -154,9 +168,20 @@ def load_recon_config(path: Path, output_override: Path | None = None) -> tuple[
             freeze_translation_epsilon_m=float(registration_raw.get("freeze_translation_epsilon_m", 0.001)),
             freeze_rotation_epsilon_deg=float(registration_raw.get("freeze_rotation_epsilon_deg", 0.25)),
             icp_voxel_size_m=float(registration_raw.get("icp_voxel_size_m", 0.006)),
+            icp_statistical_outlier_nb_neighbors=int(
+                registration_raw.get("icp_statistical_outlier_nb_neighbors", 20)
+            ),
+            icp_statistical_outlier_std_ratio=float(
+                registration_raw.get("icp_statistical_outlier_std_ratio", 1.5)
+            ),
             icp_correspondence_m=tuple(registration_raw.get("icp_correspondence_m", [0.05, 0.035, 0.025])),
             icp_max_iterations_cold=int(registration_raw.get("icp_max_iterations_cold", 20)),
             icp_max_iterations_warm=int(registration_raw.get("icp_max_iterations_warm", 3)),
+            multiway_iterations=int(registration_raw.get("multiway_iterations", 2)),
+            multiway_update_alpha=float(registration_raw.get("multiway_update_alpha", 0.5)),
+            nipple_polish_enabled=bool(registration_raw.get("nipple_polish_enabled", True)),
+            nipple_polish_alpha=float(registration_raw.get("nipple_polish_alpha", 0.8)),
+            nipple_polish_max_translation_m=float(registration_raw.get("nipple_polish_max_translation_m", 0.008)),
             icp_min_points=int(registration_raw.get("icp_min_points", 250)),
             icp_min_fitness=float(registration_raw.get("icp_min_fitness", 0.25)),
             icp_max_rmse_m=float(registration_raw.get("icp_max_rmse_m", 0.012)),

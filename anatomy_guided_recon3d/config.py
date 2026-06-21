@@ -281,6 +281,18 @@ class Nipple3DConfig:
 
     dbscan_eps_m: float = 0.005
     min_cluster_points: int = 30
+    min_detector_score: float = 0.15
+    min_observation_confidence: float = 0.15
+    min_fused_observations: int = 2
+    tip_top_fraction: float = 0.25
+    tip_min_points: int = 12
+    center_patch_fraction: float = 0.45
+    center_patch_min_points: int = 20
+    center_candidate_weight: float = 0.0
+    max_tip_center_distance_m: float = 0.018
+    max_cluster_depth_mad_m: float = 0.03
+    max_tip_signed_mad_m: float = 0.012
+    max_pairwise_nipple_distance_m: float = 0.015
     covariance_jitter_m2: float = 1e-8
     left_right_axis_world: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0]))
     mahalanobis_threshold: float = 3.0
@@ -289,6 +301,26 @@ class Nipple3DConfig:
         _validate_positive(self.dbscan_eps_m, "dbscan_eps_m")
         if self.min_cluster_points <= 0:
             raise ValueError("min_cluster_points must be positive")
+        if not (0.0 <= self.min_detector_score <= 1.0):
+            raise ValueError("min_detector_score must be in [0, 1]")
+        if not (0.0 <= self.min_observation_confidence <= 1.0):
+            raise ValueError("min_observation_confidence must be in [0, 1]")
+        if self.min_fused_observations <= 0:
+            raise ValueError("min_fused_observations must be positive")
+        if not (0.0 < self.tip_top_fraction <= 1.0):
+            raise ValueError("tip_top_fraction must be in (0, 1]")
+        if self.tip_min_points <= 0:
+            raise ValueError("tip_min_points must be positive")
+        if not (0.0 < self.center_patch_fraction <= 1.0):
+            raise ValueError("center_patch_fraction must be in (0, 1]")
+        if self.center_patch_min_points <= 0:
+            raise ValueError("center_patch_min_points must be positive")
+        if not (0.0 <= self.center_candidate_weight <= 1.0):
+            raise ValueError("center_candidate_weight must be in [0, 1]")
+        _validate_positive(self.max_tip_center_distance_m, "max_tip_center_distance_m")
+        _validate_positive(self.max_cluster_depth_mad_m, "max_cluster_depth_mad_m")
+        _validate_positive(self.max_tip_signed_mad_m, "max_tip_signed_mad_m")
+        _validate_positive(self.max_pairwise_nipple_distance_m, "max_pairwise_nipple_distance_m")
         _validate_positive(self.covariance_jitter_m2, "covariance_jitter_m2")
         axis = _readonly_array(self.left_right_axis_world, shape=(3,), name="left_right_axis_world")
         norm = float(np.linalg.norm(axis))
@@ -328,6 +360,7 @@ class CloudCleanupConfig:
 
     mask_erode_px: int = 4
     flying_depth_edge_threshold_m: float = 0.015
+    depth_gradient_threshold_m: float = 0.0
     min_depth_m: float = 0.25
     max_depth_m: float = 1.2
 
@@ -336,6 +369,8 @@ class CloudCleanupConfig:
             raise ValueError("mask_erode_px must be non-negative")
         if self.flying_depth_edge_threshold_m < 0:
             raise ValueError("flying_depth_edge_threshold_m must be non-negative")
+        if self.depth_gradient_threshold_m < 0:
+            raise ValueError("depth_gradient_threshold_m must be non-negative")
         _validate_positive(self.min_depth_m, "min_depth_m")
         _validate_positive(self.max_depth_m, "max_depth_m")
         if self.max_depth_m <= self.min_depth_m:
@@ -380,6 +415,7 @@ class AnatomyRegistrationConfig:
     """
 
     mode: Literal["off", "translation_only", "nipple_init_robust_icp"] = "nipple_init_robust_icp"
+    registration_topology: Literal["reference_star", "multiway"] = "multiway"
     reference_camera: str | None = "cam1"
     min_nipple_confidence: float = 0.15
     side_gate_margin_m: float = 0.005
@@ -393,9 +429,16 @@ class AnatomyRegistrationConfig:
     freeze_translation_epsilon_m: float = 0.001
     freeze_rotation_epsilon_deg: float = 0.25
     icp_voxel_size_m: float = 0.006
+    icp_statistical_outlier_nb_neighbors: int = 20
+    icp_statistical_outlier_std_ratio: float = 1.5
     icp_correspondence_m: tuple[float, ...] = (0.05, 0.035, 0.025)
     icp_max_iterations_cold: int = 20
     icp_max_iterations_warm: int = 3
+    multiway_iterations: int = 2
+    multiway_update_alpha: float = 0.5
+    nipple_polish_enabled: bool = True
+    nipple_polish_alpha: float = 0.8
+    nipple_polish_max_translation_m: float = 0.008
     icp_min_points: int = 250
     icp_min_fitness: float = 0.25
     icp_max_rmse_m: float = 0.012
@@ -405,6 +448,8 @@ class AnatomyRegistrationConfig:
     def __post_init__(self) -> None:
         if self.mode not in {"off", "translation_only", "nipple_init_robust_icp"}:
             raise ValueError("mode must be off, translation_only, or nipple_init_robust_icp")
+        if self.registration_topology not in {"reference_star", "multiway"}:
+            raise ValueError("registration_topology must be reference_star or multiway")
         if not (0.0 <= self.min_nipple_confidence <= 1.0):
             raise ValueError("min_nipple_confidence must be in [0, 1]")
         if self.side_gate_margin_m < 0:
@@ -421,12 +466,22 @@ class AnatomyRegistrationConfig:
         _validate_positive(self.freeze_translation_epsilon_m, "freeze_translation_epsilon_m")
         _validate_positive(self.freeze_rotation_epsilon_deg, "freeze_rotation_epsilon_deg")
         _validate_positive(self.icp_voxel_size_m, "icp_voxel_size_m")
+        if self.icp_statistical_outlier_nb_neighbors <= 0:
+            raise ValueError("icp_statistical_outlier_nb_neighbors must be positive")
+        _validate_positive(self.icp_statistical_outlier_std_ratio, "icp_statistical_outlier_std_ratio")
         if not self.icp_correspondence_m:
             raise ValueError("icp_correspondence_m must not be empty")
         for value in self.icp_correspondence_m:
             _validate_positive(float(value), "icp_correspondence_m")
         if self.icp_max_iterations_cold <= 0 or self.icp_max_iterations_warm <= 0:
             raise ValueError("icp max iterations must be positive")
+        if self.multiway_iterations <= 0:
+            raise ValueError("multiway_iterations must be positive")
+        if not (0.0 < self.multiway_update_alpha <= 1.0):
+            raise ValueError("multiway_update_alpha must be in (0, 1]")
+        if not (0.0 < self.nipple_polish_alpha <= 1.0):
+            raise ValueError("nipple_polish_alpha must be in (0, 1]")
+        _validate_positive(self.nipple_polish_max_translation_m, "nipple_polish_max_translation_m")
         if self.icp_min_points <= 0:
             raise ValueError("icp_min_points must be positive")
         if not (0.0 <= self.icp_min_fitness <= 1.0):

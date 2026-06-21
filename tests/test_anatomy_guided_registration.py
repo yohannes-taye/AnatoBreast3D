@@ -111,7 +111,12 @@ def test_translation_registration_keeps_reference_fixed_and_corrects_secondary()
         extrinsics,
         observations,
         nipples,
-        AnatomyRegistrationConfig(mode="translation_only", reference_camera="cam1", smooth_corrections=False),
+        AnatomyRegistrationConfig(
+            mode="translation_only",
+            registration_topology="reference_star",
+            reference_camera="cam1",
+            smooth_corrections=False,
+        ),
         Nipple3DConfig(),
     )
 
@@ -147,6 +152,7 @@ def test_robust_icp_refines_from_nipple_translation_init() -> None:
         nipples,
         AnatomyRegistrationConfig(
             mode="nipple_init_robust_icp",
+            registration_topology="reference_star",
             reference_camera="cam1",
             smooth_corrections=False,
             icp_min_points=50,
@@ -159,3 +165,37 @@ def test_robust_icp_refines_from_nipple_translation_init() -> None:
     assert diagnostics["cameras"]["cam0"]["reason"] == "icp_refined"
     assert diagnostics["cameras"]["cam0"]["icp"]["history"][-1]["threshold_m"] == 0.025
     assert np.allclose(refined["cam0"].T_world_cam[:3, 3], [-0.01, 0.0, 0.0], atol=0.003)
+
+
+def test_multiway_registration_does_not_pin_reference_camera() -> None:
+    clouds = {
+        "cam0": _cloud(_cube_surface((0.01, 0.0, 0.0))),
+        "cam1": _cloud(_cube_surface()),
+    }
+    extrinsics = {
+        "cam0": CameraExtrinsics("cam0", np.eye(4)),
+        "cam1": CameraExtrinsics("cam1", np.eye(4)),
+    }
+
+    refined, _, _, diagnostics = AnatomyRegistrationState().refine(
+        clouds,
+        extrinsics,
+        [],
+        {},
+        AnatomyRegistrationConfig(
+            mode="nipple_init_robust_icp",
+            registration_topology="multiway",
+            smooth_corrections=False,
+            icp_min_points=50,
+            icp_voxel_size_m=0.004,
+            icp_max_rmse_m=0.02,
+            max_translation_m=0.05,
+        ),
+        Nipple3DConfig(),
+    )
+
+    cam0_tx = float(refined["cam0"].T_world_cam[0, 3])
+    cam1_tx = float(refined["cam1"].T_world_cam[0, 3])
+    assert diagnostics["topology"] == "multiway"
+    assert abs(cam1_tx) > 0.001
+    assert np.isclose(cam0_tx - cam1_tx, -0.01, atol=0.004)

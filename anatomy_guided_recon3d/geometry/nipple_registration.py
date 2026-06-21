@@ -49,10 +49,20 @@ def _transform_cloud_cam_to_world(
     return cloud_world
 
 
-def _downsample_for_icp(cloud: o3d.geometry.PointCloud, voxel_size_m: float) -> o3d.geometry.PointCloud:
+def _downsample_for_icp(
+    cloud: o3d.geometry.PointCloud,
+    voxel_size_m: float,
+    outlier_nb_neighbors: int = 0,
+    outlier_std_ratio: float = 0.0,
+) -> o3d.geometry.PointCloud:
     if len(cloud.points) == 0:
         return copy.deepcopy(cloud)
     down = cloud.voxel_down_sample(voxel_size_m) if voxel_size_m > 0 else copy.deepcopy(cloud)
+    if len(down.points) > max(10, outlier_nb_neighbors) and outlier_nb_neighbors > 0 and outlier_std_ratio > 0.0:
+        down, _ = down.remove_statistical_outlier(
+            nb_neighbors=int(outlier_nb_neighbors),
+            std_ratio=float(outlier_std_ratio),
+        )
     if len(down.points) > 0:
         down.estimate_normals(
             o3d.geometry.KDTreeSearchParamHybrid(
@@ -89,6 +99,51 @@ def _blend_transforms(previous: np.ndarray, raw: np.ndarray, alpha: float) -> np
     rvec = (1.0 - alpha) * prev_rvec.reshape(3) + alpha * raw_rvec.reshape(3)
     translation = (1.0 - alpha) * previous[:3, 3] + alpha * raw[:3, 3]
     return _matrix_from_rtvec(rvec, translation)
+
+
+def _average_transform(transforms: Mapping[str, np.ndarray]) -> np.ndarray:
+    if not transforms:
+        return _identity()
+    rvecs: list[np.ndarray] = []
+    translations: list[np.ndarray] = []
+    for transform in transforms.values():
+        rvec, _ = cv2.Rodrigues(np.asarray(transform[:3, :3], dtype=np.float64))
+        rvecs.append(rvec.reshape(3))
+        translations.append(np.asarray(transform[:3, 3], dtype=np.float64))
+    return _matrix_from_rtvec(
+        np.mean(np.asarray(rvecs, dtype=np.float64), axis=0),
+        np.mean(np.asarray(translations, dtype=np.float64), axis=0),
+    )
+
+
+def _median_transform(transforms: list[np.ndarray]) -> np.ndarray:
+    if not transforms:
+        return _identity()
+    rvecs: list[np.ndarray] = []
+    translations: list[np.ndarray] = []
+    for transform in transforms:
+        rvec, _ = cv2.Rodrigues(np.asarray(transform[:3, :3], dtype=np.float64))
+        rvecs.append(rvec.reshape(3))
+        translations.append(np.asarray(transform[:3, 3], dtype=np.float64))
+    return _matrix_from_rtvec(
+        np.median(np.asarray(rvecs, dtype=np.float64), axis=0),
+        np.median(np.asarray(translations, dtype=np.float64), axis=0),
+    )
+
+
+def _gauge_normalize_deltas(deltas: Mapping[str, np.ndarray]) -> dict[str, np.ndarray]:
+    if not deltas:
+        return {}
+    gauge_inv = np.linalg.inv(_average_transform(deltas))
+    return {cam_id: gauge_inv @ delta for cam_id, delta in deltas.items()}
+
+
+def _merge_clouds(clouds: list[o3d.geometry.PointCloud]) -> o3d.geometry.PointCloud:
+    merged = o3d.geometry.PointCloud()
+    for cloud in clouds:
+        if len(cloud.points) > 0:
+            merged += cloud
+    return merged
 
 
 def _valid_nipple_anchors(nipples: Mapping[str, FusedNipple]) -> dict[str, FusedNipple]:
@@ -251,6 +306,7 @@ def _delta_passes_basic_gates(
 class _CameraState:
     raw_delta_world: np.ndarray = field(default_factory=_identity)
     smoothed_delta_world: np.ndarray = field(default_factory=_identity)
+    raw_history: list[np.ndarray] = field(default_factory=list)
     stable_frames: int = 0
     frozen: bool = False
 
@@ -307,6 +363,17 @@ class AnatomyRegistrationState:
                 },
             )
 
+        if config.registration_topology == "multiway":
+            return self._refine_multiway(
+                camera_ids,
+                clouds_cam,
+                extrinsics,
+                observations,
+                nipples,
+                config,
+                nipple_config,
+            )
+
         reference = config.reference_camera if config.reference_camera in camera_ids else (camera_ids[0] if camera_ids else None)
         diagnostics: dict[str, Any] = {
             "mode": config.mode,
@@ -321,6 +388,8 @@ class AnatomyRegistrationState:
             target_cloud = _downsample_for_icp(
                 _transform_cloud_cam_to_world(clouds_cam[reference], extrinsics[reference], _identity()),
                 config.icp_voxel_size_m,
+                config.icp_statistical_outlier_nb_neighbors,
+                config.icp_statistical_outlier_std_ratio,
             )
 
         raw_deltas: dict[str, np.ndarray] = {}
@@ -425,6 +494,362 @@ class AnatomyRegistrationState:
         }
         return refined, corrected_observations, corrected_nipples, diagnostics
 
+    def _refine_multiway(
+        self,
+        camera_ids: list[str],
+        clouds_cam: Mapping[str, o3d.geometry.PointCloud],
+        extrinsics: Mapping[str, CameraExtrinsics],
+        observations: list[NippleObservation],
+        nipples: Mapping[str, FusedNipple],
+        config: AnatomyRegistrationConfig,
+        nipple_config: Nipple3DConfig,
+    ) -> tuple[dict[str, CameraExtrinsics], list[NippleObservation], dict[str, FusedNipple], dict[str, Any]]:
+        diagnostics: dict[str, Any] = {
+            "mode": config.mode,
+            "topology": "multiway",
+            "reference_camera": None,
+            "frame_index": self._frame_index,
+            "gauge_normalized": True,
+            "iterations": [],
+            "cameras": {},
+        }
+        if not camera_ids:
+            return {}, [], {}, diagnostics
+
+        current_deltas: dict[str, np.ndarray] = {}
+        camera_payloads: dict[str, dict[str, Any]] = {}
+        skipped_frozen: set[str] = set()
+        for cam_id in camera_ids:
+            state = self._states.setdefault(cam_id, _CameraState())
+            cam_obs = _camera_observations(cam_id, observations, nipples, config)
+            nipple_init = _translation_init_from_nipples(cam_obs, nipples)
+            if state.frozen:
+                initial = state.raw_delta_world.copy()
+                initial_reason = "frozen"
+                skipped_frozen.add(cam_id)
+            elif nipple_init is not None:
+                initial = nipple_init
+                initial_reason = "nipple_translation_init"
+            else:
+                initial = state.smoothed_delta_world.copy()
+                initial_reason = "warm_start_without_valid_nipple"
+            current_deltas[cam_id] = initial
+            before_residual, before_by_side = _nipple_residuals(cam_obs, nipples)
+            camera_payloads[cam_id] = {
+                "nipple_count": len(cam_obs),
+                "before_residual_m": before_residual,
+                "before_residual_by_side_m": before_by_side,
+                "initial_reason": initial_reason,
+                "icp": {"enabled": False, "reason": "translation_only" if config.mode == "translation_only" else None},
+            }
+
+        current_deltas = _gauge_normalize_deltas(current_deltas)
+
+        if config.mode != "translation_only":
+            for iteration_idx in range(int(config.multiway_iterations)):
+                iteration_payload: dict[str, Any] = {"index": iteration_idx, "cameras": {}}
+                next_deltas = dict(current_deltas)
+                for cam_id in camera_ids:
+                    if cam_id in skipped_frozen:
+                        iteration_payload["cameras"][cam_id] = {"accepted": True, "reason": "frozen"}
+                        continue
+                    candidate, payload = self._estimate_multiway_camera_delta(
+                        cam_id,
+                        camera_ids,
+                        clouds_cam,
+                        extrinsics,
+                        current_deltas,
+                        observations,
+                        nipples,
+                        config,
+                    )
+                    next_deltas[cam_id] = candidate
+                    iteration_payload["cameras"][cam_id] = payload
+                    camera_payloads[cam_id]["icp"] = payload
+                current_deltas = _gauge_normalize_deltas(next_deltas)
+                diagnostics["iterations"].append(iteration_payload)
+
+        current_deltas = _gauge_normalize_deltas(current_deltas)
+        if config.nipple_polish_enabled:
+            current_deltas, diagnostics["nipple_polish"] = self._polish_deltas_to_nipple_consensus(
+                camera_ids,
+                current_deltas,
+                observations,
+                config,
+                nipple_config,
+            )
+        else:
+            diagnostics["nipple_polish"] = {"enabled": False}
+        smoothed_deltas: dict[str, np.ndarray] = {}
+        raw_deltas: dict[str, np.ndarray] = {}
+        for cam_id in camera_ids:
+            state = self._states.setdefault(cam_id, _CameraState())
+            cam_obs = _camera_observations(cam_id, observations, nipples, config)
+            before_residual = camera_payloads[cam_id]["before_residual_m"]
+            raw_delta = current_deltas.get(cam_id, state.smoothed_delta_world.copy())
+            accepted, gate_reason, after_residual, after_by_side = self._gate_delta(
+                raw_delta,
+                cam_obs,
+                nipples,
+                before_residual,
+                config,
+            )
+            reason = "multiway_icp_refined" if config.mode != "translation_only" else camera_payloads[cam_id]["initial_reason"]
+            if not accepted:
+                raw_delta = state.smoothed_delta_world.copy()
+                reason = gate_reason
+            elif config.freeze_after_frames > 0:
+                if not state.frozen:
+                    state.raw_history.append(raw_delta.copy())
+                    if len(state.raw_history) > int(config.freeze_after_frames):
+                        state.raw_history = state.raw_history[-int(config.freeze_after_frames) :]
+                    if len(state.raw_history) >= int(config.freeze_after_frames):
+                        raw_delta = _median_transform(state.raw_history)
+                        state.frozen = True
+                        state.stable_frames = int(config.freeze_after_frames)
+                        reason = f"{reason}_median_frozen"
+                else:
+                    state.raw_history.append(raw_delta.copy())
+                    if len(state.raw_history) > int(config.freeze_after_frames):
+                        state.raw_history = state.raw_history[-int(config.freeze_after_frames) :]
+
+            smoothed = raw_delta
+            if config.smooth_corrections and not state.frozen:
+                smoothed = _blend_transforms(state.smoothed_delta_world, raw_delta, config.correction_alpha)
+
+            delta_change = np.linalg.inv(state.smoothed_delta_world) @ smoothed
+            if not state.frozen:
+                if (
+                    accepted
+                    and _translation_norm_m(delta_change) <= config.freeze_translation_epsilon_m
+                    and _rotation_angle_deg(delta_change) <= config.freeze_rotation_epsilon_deg
+                ):
+                    state.stable_frames += 1
+                else:
+                    state.stable_frames = 0
+
+            state.raw_delta_world = raw_delta.copy()
+            state.smoothed_delta_world = smoothed.copy()
+            raw_deltas[cam_id] = raw_delta
+            smoothed_deltas[cam_id] = smoothed
+            diagnostics["cameras"][cam_id] = {
+                "accepted": bool(accepted),
+                "reason": reason,
+                "nipple_count": int(camera_payloads[cam_id]["nipple_count"]),
+                "before_residual_m": before_residual,
+                "before_residual_by_side_m": camera_payloads[cam_id]["before_residual_by_side_m"],
+                "after_raw_residual_m": after_residual,
+                "after_raw_residual_by_side_m": after_by_side,
+                "raw_translation_m": raw_delta[:3, 3].tolist(),
+                "raw_translation_norm_m": _translation_norm_m(raw_delta),
+                "raw_rotation_deg": _rotation_angle_deg(raw_delta),
+                "smoothed_translation_m": smoothed[:3, 3].tolist(),
+                "smoothed_translation_norm_m": _translation_norm_m(smoothed),
+                "smoothed_rotation_deg": _rotation_angle_deg(smoothed),
+                "stable_frames": state.stable_frames,
+                "frozen": state.frozen,
+                "freeze_history_frames": len(state.raw_history),
+                "icp": camera_payloads[cam_id]["icp"],
+                "raw_delta_world": raw_delta.tolist(),
+                "smoothed_delta_world": smoothed.tolist(),
+            }
+
+        self._frame_index += 1
+        diagnostics["all_frozen"] = bool(camera_ids) and all(
+            self._states.get(cam_id, _CameraState()).frozen for cam_id in camera_ids
+        )
+        refined = {
+            cam_id: CameraExtrinsics(cam_id, smoothed_deltas.get(cam_id, _identity()) @ extrinsics[cam_id].T_world_cam)
+            for cam_id in camera_ids
+        }
+        corrected_observations = transform_observations_by_camera_delta(observations, smoothed_deltas)
+        corrected_nipples = fuse_nipple_observations(corrected_observations, nipple_config)
+        diagnostics["corrected_nipple_anchors"] = {
+            side: {
+                "mean_world_m": nipple.mean_world_m.tolist(),
+                "confidence": float(nipple.confidence),
+                "used_cameras": list(nipple.used_cameras),
+                "rejected_cameras": list(nipple.rejected_cameras),
+            }
+            for side, nipple in corrected_nipples.items()
+        }
+        return refined, corrected_observations, corrected_nipples, diagnostics
+
+    def _polish_deltas_to_nipple_consensus(
+        self,
+        camera_ids: list[str],
+        current_deltas: Mapping[str, np.ndarray],
+        observations: list[NippleObservation],
+        config: AnatomyRegistrationConfig,
+        nipple_config: Nipple3DConfig,
+    ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+        corrected_observations = transform_observations_by_camera_delta(observations, current_deltas)
+        corrected_nipples = fuse_nipple_observations(corrected_observations, nipple_config)
+        anchors = _valid_nipple_anchors(corrected_nipples)
+        payload: dict[str, Any] = {
+            "enabled": True,
+            "anchors": {
+                side: {
+                    "confidence": float(nipple.confidence),
+                    "used_cameras": list(nipple.used_cameras),
+                    "rejected_cameras": list(nipple.rejected_cameras),
+                }
+                for side, nipple in corrected_nipples.items()
+            },
+            "cameras": {},
+        }
+        if not anchors:
+            payload["reason"] = "no_valid_corrected_anchor"
+            return dict(current_deltas), payload
+
+        by_camera: dict[str, list[tuple[np.ndarray, float, str]]] = {cam_id: [] for cam_id in camera_ids}
+        for obs in corrected_observations:
+            if obs.cam_id not in by_camera or obs.side not in anchors:
+                continue
+            if obs.confidence < config.min_nipple_confidence:
+                continue
+            offset = anchors[obs.side].mean_world_m - obs.point_world_m
+            by_camera[obs.cam_id].append((offset, max(float(obs.confidence), 1e-3), obs.side))
+
+        polished: dict[str, np.ndarray] = dict(current_deltas)
+        for cam_id in camera_ids:
+            items = by_camera.get(cam_id, [])
+            if not items:
+                payload["cameras"][cam_id] = {"applied": False, "reason": "no_camera_nipple_observation"}
+                continue
+            offsets = np.asarray([item[0] for item in items], dtype=np.float64)
+            weights = np.asarray([item[1] for item in items], dtype=np.float64)
+            offset = np.average(offsets, axis=0, weights=weights)
+            raw_norm = float(np.linalg.norm(offset))
+            if raw_norm > config.nipple_polish_max_translation_m:
+                offset = offset / max(raw_norm, 1e-9) * config.nipple_polish_max_translation_m
+            offset = offset * config.nipple_polish_alpha
+            polish = _identity()
+            polish[:3, 3] = offset
+            polished[cam_id] = polish @ current_deltas.get(cam_id, _identity())
+            payload["cameras"][cam_id] = {
+                "applied": True,
+                "sides": [item[2] for item in items],
+                "raw_offset_norm_m": raw_norm,
+                "applied_offset_m": offset.tolist(),
+                "applied_offset_norm_m": float(np.linalg.norm(offset)),
+            }
+
+        polished = _gauge_normalize_deltas(polished)
+        payload["gauge_normalized"] = True
+        return polished, payload
+
+    def _estimate_multiway_camera_delta(
+        self,
+        cam_id: str,
+        camera_ids: list[str],
+        clouds_cam: Mapping[str, o3d.geometry.PointCloud],
+        extrinsics: Mapping[str, CameraExtrinsics],
+        current_deltas: Mapping[str, np.ndarray],
+        observations: list[NippleObservation],
+        nipples: Mapping[str, FusedNipple],
+        config: AnatomyRegistrationConfig,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        base_delta = current_deltas.get(cam_id, _identity())
+        cam_obs = _camera_observations(cam_id, observations, nipples, config)
+        source_cloud = clouds_cam.get(cam_id)
+        if source_cloud is None or len(source_cloud.points) < config.icp_min_points:
+            return base_delta, {"enabled": True, "accepted": False, "reason": "source_too_small"}
+
+        target_parts: list[o3d.geometry.PointCloud] = []
+        for other_id in camera_ids:
+            if other_id == cam_id:
+                continue
+            other_cloud = clouds_cam.get(other_id)
+            if other_cloud is None or len(other_cloud.points) < config.icp_min_points:
+                continue
+            target_parts.append(
+                _transform_cloud_cam_to_world(
+                    other_cloud,
+                    extrinsics[other_id],
+                    current_deltas.get(other_id, _identity()),
+                )
+            )
+        if not target_parts:
+            return base_delta, {"enabled": True, "accepted": False, "reason": "target_missing"}
+
+        source_world = _downsample_for_icp(
+            _transform_cloud_cam_to_world(source_cloud, extrinsics[cam_id], base_delta),
+            config.icp_voxel_size_m,
+            config.icp_statistical_outlier_nb_neighbors,
+            config.icp_statistical_outlier_std_ratio,
+        )
+        target_world = _downsample_for_icp(
+            _merge_clouds(target_parts),
+            config.icp_voxel_size_m,
+            config.icp_statistical_outlier_nb_neighbors,
+            config.icp_statistical_outlier_std_ratio,
+        )
+        if len(source_world.points) < config.icp_min_points:
+            return base_delta, {"enabled": True, "accepted": False, "reason": "downsampled_source_too_small"}
+        if len(target_world.points) < config.icp_min_points:
+            return base_delta, {"enabled": True, "accepted": False, "reason": "downsampled_target_too_small"}
+
+        estimator = _make_icp_estimator(config)
+        state = self._states.setdefault(cam_id, _CameraState())
+        iterations = config.icp_max_iterations_warm if state.stable_frames > 0 else config.icp_max_iterations_cold
+        correction = _identity()
+        history: list[dict[str, Any]] = []
+        try:
+            for threshold in config.icp_correspondence_m:
+                result = o3d.pipelines.registration.registration_icp(
+                    source_world,
+                    target_world,
+                    float(threshold),
+                    correction,
+                    estimator,
+                    o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=int(iterations)),
+                )
+                correction = np.asarray(result.transformation, dtype=np.float64)
+                history.append(
+                    {
+                        "threshold_m": float(threshold),
+                        "fitness": float(result.fitness),
+                        "inlier_rmse_m": float(result.inlier_rmse),
+                        "correspondences": int(len(result.correspondence_set)),
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001 - ICP is optional refinement
+            return base_delta, {"enabled": True, "accepted": False, "reason": "icp_exception", "error": f"{type(exc).__name__}: {exc}"}
+
+        final_metrics = history[-1] if history else {}
+        if float(final_metrics.get("fitness", 0.0)) < config.icp_min_fitness:
+            return base_delta, {"enabled": True, "accepted": False, "reason": "low_fitness", "history": history}
+        if float(final_metrics.get("inlier_rmse_m", float("inf"))) > config.icp_max_rmse_m:
+            return base_delta, {"enabled": True, "accepted": False, "reason": "high_rmse", "history": history}
+
+        candidate = correction @ base_delta
+        candidate = _blend_transforms(base_delta, candidate, config.multiway_update_alpha)
+        before_residual, _ = _nipple_residuals(cam_obs, nipples)
+        ok, gate_reason, residual = _delta_passes_basic_gates(candidate, cam_obs, nipples, before_residual, config)
+        if not ok:
+            return (
+                base_delta,
+                {
+                    "enabled": True,
+                    "accepted": False,
+                    "reason": gate_reason,
+                    "history": history,
+                    "candidate_residual_m": residual,
+                },
+            )
+        return (
+            candidate,
+            {
+                "enabled": True,
+                "accepted": True,
+                "reason": "multiway_icp_refined",
+                "history": history,
+                "target_cameras": [other_id for other_id in camera_ids if other_id != cam_id],
+                "candidate_residual_m": residual,
+            },
+        )
+
     def _estimate_camera_delta(
         self,
         cam_id: str,
@@ -457,6 +882,8 @@ class AnatomyRegistrationState:
         source_world = _downsample_for_icp(
             _transform_cloud_cam_to_world(clouds_cam[cam_id], extrinsics[cam_id], nipple_init),
             config.icp_voxel_size_m,
+            config.icp_statistical_outlier_nb_neighbors,
+            config.icp_statistical_outlier_std_ratio,
         )
         if len(source_world.points) < config.icp_min_points:
             return nipple_init, "icp_downsampled_source_too_small", {"enabled": False, "reason": "downsampled_source_too_small"}

@@ -36,8 +36,9 @@ perception:
   nms_iou: 0.5
 
 cloud_cleanup:
-  mask_erode_px: 4
+  mask_erode_px: 5
   flying_depth_edge_threshold_m: 0.015
+  depth_gradient_threshold_m: 0.008
   min_depth_m: 0.25
   max_depth_m: 1.2
 
@@ -74,6 +75,18 @@ visualization:
 nipple3d:
   dbscan_eps_m: 0.005
   min_cluster_points: 30
+  min_detector_score: 0.20
+  min_observation_confidence: 0.32
+  min_fused_observations: 2
+  tip_top_fraction: 0.25
+  tip_min_points: 20
+  center_patch_fraction: 0.45
+  center_patch_min_points: 20
+  center_candidate_weight: 0.0
+  max_tip_center_distance_m: 0.018
+  max_cluster_depth_mad_m: 0.03
+  max_tip_signed_mad_m: 0.012
+  max_pairwise_nipple_distance_m: 0.015
   covariance_jitter_m2: 1.0e-8
   # In the current calibrated rig the two nipples separate mostly along world Y.
   # The assignment helper maps smaller projection to "left", so -Y makes the
@@ -95,22 +108,30 @@ anatomy_registration:
   # Anatomy-guided runs use nipple anchors as initialization and robust ICP as
   # the actual per-camera alignment correction.
   mode: nipple_init_robust_icp
+  registration_topology: multiway
   reference_camera: cam1
-  min_nipple_confidence: 0.15
+  min_nipple_confidence: 0.32
   side_gate_margin_m: 0.005
   max_translation_m: 0.04
   max_rotation_deg: 8.0
   residual_improvement_ratio: 1.05
   smooth_corrections: true
-  correction_alpha: 0.35
+  correction_alpha: 0.8
   freeze_after_frames: 20
   recheck_interval_frames: 30
   freeze_translation_epsilon_m: 0.001
   freeze_rotation_epsilon_deg: 0.25
   icp_voxel_size_m: 0.006
+  icp_statistical_outlier_nb_neighbors: 20
+  icp_statistical_outlier_std_ratio: 1.5
   icp_correspondence_m: [0.05, 0.035, 0.025]
   icp_max_iterations_cold: 20
   icp_max_iterations_warm: 3
+  multiway_iterations: 2
+  multiway_update_alpha: 0.5
+  nipple_polish_enabled: true
+  nipple_polish_alpha: 0.8
+  nipple_polish_max_translation_m: 0.008
   icp_min_points: 250
   icp_min_fitness: 0.25
   icp_max_rmse_m: 0.012
@@ -123,7 +144,7 @@ post_fusion_cleanup:
   radius_m: 0.012
   min_neighbors: 8
   min_retained_ratio: 0.25
-  dbscan_enabled: true
+  dbscan_enabled: false
   dbscan_eps_m: 0.012
   dbscan_min_points: 40
   nipple_anchor_keep_radius_m: 0.035
@@ -132,7 +153,7 @@ post_fusion_cleanup:
   preserve_nipple_clusters: true
 
 tsdf_fusion:
-  enabled: false
+  enabled: true
   voxel_length_m: 0.004
   sdf_trunc_m: 0.025
   depth_trunc_m: 1.2

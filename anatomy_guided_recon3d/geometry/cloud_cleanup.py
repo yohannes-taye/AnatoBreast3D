@@ -30,6 +30,30 @@ def flying_depth_edges(depth_m: np.ndarray, valid: np.ndarray, threshold_m: floa
     return edges
 
 
+def depth_gradient_edges(depth_m: np.ndarray, valid: np.ndarray, threshold_m: float) -> np.ndarray:
+    """Reject smooth but steep depth ramps that form flying edge tails."""
+    if threshold_m <= 0:
+        return np.zeros_like(valid, dtype=bool)
+    if not np.any(valid):
+        return np.zeros_like(valid, dtype=bool)
+    ys, xs = np.nonzero(valid)
+    pad = 2
+    y0 = max(int(ys.min()) - pad, 0)
+    y1 = min(int(ys.max()) + pad + 1, depth_m.shape[0])
+    x0 = max(int(xs.min()) - pad, 0)
+    x1 = min(int(xs.max()) + pad + 1, depth_m.shape[1])
+    local_valid = valid[y0:y1, x0:x1]
+    local_depth = depth_m[y0:y1, x0:x1]
+    fill_value = float(np.median(local_depth[local_valid]))
+    filled = np.where(local_valid, local_depth, fill_value)
+    grad_y, grad_x = np.gradient(filled)
+    magnitude = np.sqrt(grad_x * grad_x + grad_y * grad_y)
+    local_reject = local_valid & np.isfinite(magnitude) & (magnitude > threshold_m)
+    reject = np.zeros_like(valid, dtype=bool)
+    reject[y0:y1, x0:x1] = local_reject
+    return reject
+
+
 def cleanup_depth_config(frame_depth_config: DepthConfig, config: CloudCleanupConfig) -> DepthConfig:
     """Apply pipeline cleanup depth range while preserving SDK depth scale.
 
@@ -65,7 +89,8 @@ def cleaned_breast_mask(
     valid = valid_depth_mask(depth_raw, ranged_depth_config)
     depth_m = depth_raw.astype(np.float64) * ranged_depth_config.depth_scale_m
     edge_reject = flying_depth_edges(depth_m, valid, config.flying_depth_edge_threshold_m)
-    return mask & valid & ~edge_reject
+    gradient_reject = depth_gradient_edges(depth_m, valid & mask, config.depth_gradient_threshold_m)
+    return mask & valid & ~edge_reject & ~gradient_reject
 
 
 def backproject_cleaned_breast_cloud(

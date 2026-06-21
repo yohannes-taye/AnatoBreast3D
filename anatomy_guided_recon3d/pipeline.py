@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import json
 import logging
 import socket
@@ -18,6 +19,7 @@ from anatomy_guided_recon3d.config import (
     ReconstructionResult,
     RGBDFrame,
 )
+from anatomy_guided_recon3d.calibration.io import save_extrinsics
 from anatomy_guided_recon3d.geometry.cloud_cleanup import backproject_cleaned_breast_cloud
 from anatomy_guided_recon3d.geometry.fusion import FusionBackend, PointCloudFusionBackend, point_cloud_bounds
 from anatomy_guided_recon3d.geometry.guided_fusion import (
@@ -76,6 +78,15 @@ def _choose_rerun_ports(web_port: int, grpc_port: int) -> tuple[int, int]:
         if _port_available(candidate_web) and _port_available(candidate_grpc):
             return candidate_web, candidate_grpc
     raise OSError(f"No free rerun port pair found from {web_port}/{grpc_port}")
+
+
+def _nipple_payload(nipple: FusedNipple) -> dict[str, object]:
+    return {
+        "mean_world_m": nipple.mean_world_m.tolist(),
+        "confidence": float(nipple.confidence),
+        "used_cameras": list(nipple.used_cameras),
+        "rejected_cameras": list(nipple.rejected_cameras),
+    }
 
 
 def _build_rerun_blueprint(rrb, cam_ids: list[str], log_cameras: bool):
@@ -150,7 +161,14 @@ class Recon3DPipeline:
         self._last_tsdf_fusion: dict[str, object] | None = None
         self._registration_state = AnatomyRegistrationState()
         self._repeatability_tracker = TemporalRepeatabilityTracker(config.quality_metrics)
+        history_len = max(1, int(config.quality_metrics.temporal_window))
+        self._nipple_anchor_history: dict[str, deque[FusedNipple]] = {
+            "left": deque(maxlen=history_len),
+            "right": deque(maxlen=history_len),
+        }
+        self._last_nipple_anchor_stabilization: dict[str, object] | None = None
         self._last_quality_metrics: dict[str, object] | None = None
+        self._last_refined_extrinsics: dict[str, CameraExtrinsics] | None = None
 
     def _validate_frames(self, frames: Mapping[str, RGBDFrame]) -> int:
         if not frames:
@@ -180,6 +198,59 @@ class Recon3DPipeline:
                 rejected_cameras=nipple.rejected_cameras,
             )
         return smoothed
+
+    def _stabilize_nipples(self, nipples: dict[str, FusedNipple]) -> dict[str, FusedNipple]:
+        stabilized: dict[str, FusedNipple] = {}
+        diagnostics: dict[str, object] = {"enabled": True, "sides": {}}
+        min_cameras = int(self.config.nipple3d.min_fused_observations)
+        jitter = float(self.config.nipple3d.covariance_jitter_m2)
+        for side in ("left", "right"):
+            current = nipples[side]
+            history = self._nipple_anchor_history[side]
+            current_valid = (
+                current.confidence > 0.0
+                and len(current.used_cameras) >= min_cameras
+                and np.isfinite(current.mean_world_m).all()
+            )
+            if current_valid:
+                history.append(current)
+
+            if history:
+                points = np.asarray([item.mean_world_m for item in history], dtype=np.float64)
+                mean = np.median(points, axis=0)
+                covariances = np.asarray([item.covariance_world_m2 for item in history], dtype=np.float64)
+                covariance = np.mean(covariances, axis=0)
+                if points.shape[0] >= 2:
+                    centered = points - mean.reshape(1, 3)
+                    covariance += centered.T @ centered / max(points.shape[0] - 1, 1)
+                covariance = 0.5 * (covariance + covariance.T) + np.eye(3, dtype=np.float64) * jitter
+                confidence = float(np.median([item.confidence for item in history]))
+                if not current_valid:
+                    confidence *= 0.85
+                used_cameras = sorted({cam for item in history for cam in item.used_cameras})
+                rejected_cameras = list(current.rejected_cameras)
+                stabilized[side] = FusedNipple(
+                    side=side,
+                    mean_world_m=mean,
+                    covariance_world_m2=covariance,
+                    confidence=float(np.clip(confidence, 0.0, 1.0)),
+                    used_cameras=used_cameras,
+                    rejected_cameras=rejected_cameras,
+                )
+                source = "current_temporal_median" if current_valid else "history_fallback"
+            else:
+                stabilized[side] = current
+                source = "current_invalid_no_history"
+
+            diagnostics["sides"][side] = {
+                "source": source,
+                "current_valid": bool(current_valid),
+                "history_frames": int(len(history)),
+                "current": _nipple_payload(current),
+                "stabilized": _nipple_payload(stabilized[side]),
+            }
+        self._last_nipple_anchor_stabilization = diagnostics
+        return stabilized
 
     def _write_cloud_and_nipples(self, result: ReconstructionResult) -> None:
         out_dir = self.config.output_dir
@@ -216,6 +287,12 @@ class Recon3DPipeline:
                 json.dumps(self._last_quality_metrics, indent=2),
                 encoding="utf-8",
             )
+        if (
+            self._last_refined_extrinsics is not None
+            and self._last_nipple_registration is not None
+            and bool(self._last_nipple_registration.get("all_frozen", False))
+        ):
+            save_extrinsics(out_dir / "extrinsics_refined.json", self._last_refined_extrinsics)
 
     def _write_summary(self, result: ReconstructionResult) -> None:
         out_dir = self.config.output_dir
@@ -510,7 +587,14 @@ class Recon3DPipeline:
         )
         registration_diag["side_gate"] = side_gate
         self._last_nipple_registration = registration_diag
+        self._last_refined_extrinsics = refined_extrinsics
         timings["registration_ms"] = _now_ms(start)
+
+        stabilized_nipples = (
+            corrected_nipples
+            if self.config.anatomy_registration.mode == "off"
+            else self._stabilize_nipples(corrected_nipples)
+        )
 
         start = time.perf_counter()
         if self.config.anatomy_registration.mode == "off":
@@ -530,7 +614,7 @@ class Recon3DPipeline:
             view_decisions = make_nipple_guided_view_decisions(
                 list(frames.keys()),
                 corrected_observations,
-                corrected_nipples,
+                stabilized_nipples,
                 self.config.nipple_guided_fusion,
             )
             weighted_clouds, guided_point_counts = apply_guided_weights_to_clouds(
@@ -543,23 +627,18 @@ class Recon3DPipeline:
             "enabled": self.config.anatomy_registration.mode != "off" and bool(self.config.nipple_guided_fusion.enabled),
             "mode": self.config.anatomy_registration.mode,
             "initial_fused_nipple_anchors": {
-                side: {
-                    "mean_world_m": nipple.mean_world_m.tolist(),
-                    "confidence": float(nipple.confidence),
-                    "used_cameras": list(nipple.used_cameras),
-                    "rejected_cameras": list(nipple.rejected_cameras),
-                }
+                side: _nipple_payload(nipple)
                 for side, nipple in nipples.items()
             },
             "corrected_fused_nipple_anchors": {
-                side: {
-                    "mean_world_m": nipple.mean_world_m.tolist(),
-                    "confidence": float(nipple.confidence),
-                    "used_cameras": list(nipple.used_cameras),
-                    "rejected_cameras": list(nipple.rejected_cameras),
-                }
+                side: _nipple_payload(nipple)
                 for side, nipple in corrected_nipples.items()
             },
+            "stabilized_fused_nipple_anchors": {
+                side: _nipple_payload(nipple)
+                for side, nipple in stabilized_nipples.items()
+            },
+            "nipple_anchor_stabilization": self._last_nipple_anchor_stabilization,
             "view_decisions": view_decisions,
             "weighted_point_counts": guided_point_counts,
         }
@@ -612,7 +691,7 @@ class Recon3DPipeline:
         start = time.perf_counter()
         fused_cloud, cleanup_diag = cleanup_fused_cloud(
             fused_cloud,
-            corrected_nipples,
+            stabilized_nipples,
             self.config.post_fusion_cleanup,
         )
         self._last_final_cleanup = cleanup_diag
@@ -642,7 +721,7 @@ class Recon3DPipeline:
             if radius > 0.0:
                 areola = np.zeros(len(points), dtype=bool)
                 for side in ("left", "right"):
-                    nipple = corrected_nipples.get(side)
+                    nipple = stabilized_nipples.get(side)
                     if nipple is not None and nipple.confidence > 0.0 and np.isfinite(nipple.mean_world_m).all():
                         areola |= np.linalg.norm(points - np.asarray(nipple.mean_world_m), axis=1) <= radius
                 areola_color = self.config.visualization.uniform_areola_color
@@ -655,7 +734,7 @@ class Recon3DPipeline:
             fused_cloud.colors = o3d.utility.Vector3dVector(painted)
 
         start = time.perf_counter()
-        nipples = self._smooth_nipples(corrected_nipples, timestamp_ns)
+        nipples = self._smooth_nipples(stabilized_nipples, timestamp_ns)
         timings["smoothing_ms"] = _now_ms(start)
 
         start = time.perf_counter()

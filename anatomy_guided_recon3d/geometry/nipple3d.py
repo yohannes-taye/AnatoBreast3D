@@ -58,6 +58,91 @@ def _select_cluster(points_cam_m: np.ndarray, labels: np.ndarray, min_cluster_po
     return np.nonzero(labels == selected_label)[0]
 
 
+def _median_absolute_deviation(values: np.ndarray) -> float:
+    if values.size == 0:
+        return 0.0
+    median = float(np.median(values))
+    return float(np.median(np.abs(values - median)))
+
+
+def _filter_cluster_by_depth_mad(
+    points_cam_m: np.ndarray,
+    pixels_uv: np.ndarray,
+    cfg: Nipple3DConfig,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    z = points_cam_m[:, 2]
+    mad = _median_absolute_deviation(z)
+    if mad > cfg.max_cluster_depth_mad_m:
+        return None
+    sigma = max(1.4826 * mad, 0.0015)
+    gate_m = max(0.006, min(0.04, 3.5 * sigma))
+    median_z = float(np.median(z))
+    keep = np.abs(z - median_z) <= gate_m
+    if int(np.count_nonzero(keep)) < cfg.min_cluster_points:
+        return None
+    return points_cam_m[keep], pixels_uv[keep]
+
+
+def _robust_tip_candidate_cam(
+    cluster_cam_m: np.ndarray,
+    normal_cam: np.ndarray,
+    cfg: Nipple3DConfig,
+) -> tuple[np.ndarray, np.ndarray, float] | None:
+    centroid = cluster_cam_m.mean(axis=0)
+    signed = (cluster_cam_m - centroid) @ normal_cam
+    top_count = max(cfg.tip_min_points, int(np.ceil(cluster_cam_m.shape[0] * cfg.tip_top_fraction)))
+    top_count = min(top_count, cluster_cam_m.shape[0])
+    if top_count < cfg.tip_min_points:
+        return None
+    order = np.argsort(signed)
+    top_idx = order[-top_count:]
+    top_signed = signed[top_idx]
+    top_mad = _median_absolute_deviation(top_signed)
+    if top_mad > cfg.max_tip_signed_mad_m:
+        top_median = float(np.median(top_signed))
+        sigma = max(1.4826 * top_mad, 0.0015)
+        local_gate = min(cfg.max_tip_signed_mad_m * 3.0, 3.0 * sigma)
+        refined_idx = top_idx[np.abs(top_signed - top_median) <= local_gate]
+        if refined_idx.size < cfg.tip_min_points:
+            return None
+        top_idx = refined_idx
+        top_signed = signed[top_idx]
+        top_mad = _median_absolute_deviation(top_signed)
+        if top_mad > cfg.max_tip_signed_mad_m:
+            return None
+    candidate_cam = np.median(cluster_cam_m[top_idx], axis=0)
+    return candidate_cam, top_idx, top_mad
+
+
+def _robust_center_candidate_cam(
+    cluster_cam_m: np.ndarray,
+    cluster_pixels_uv: np.ndarray,
+    box_xyxy: np.ndarray,
+    cfg: Nipple3DConfig,
+) -> tuple[np.ndarray, np.ndarray, float] | None:
+    x1, y1, x2, y2 = box_xyxy.astype(np.float64).tolist()
+    cx = 0.5 * (x1 + x2)
+    cy = 0.5 * (y1 + y2)
+    half_w = max(0.5 * (x2 - x1), 1.0)
+    half_h = max(0.5 * (y2 - y1), 1.0)
+    dx = (cluster_pixels_uv[:, 0].astype(np.float64) - cx) / half_w
+    dy = (cluster_pixels_uv[:, 1].astype(np.float64) - cy) / half_h
+    radial = np.sqrt(dx * dx + dy * dy)
+    center_idx = np.nonzero(radial <= cfg.center_patch_fraction)[0]
+    if center_idx.size < cfg.center_patch_min_points:
+        order = np.argsort(radial)
+        keep_count = min(cluster_cam_m.shape[0], cfg.center_patch_min_points)
+        if keep_count < cfg.center_patch_min_points:
+            return None
+        center_idx = order[:keep_count]
+    center_points = cluster_cam_m[center_idx]
+    z_mad = _median_absolute_deviation(center_points[:, 2])
+    if z_mad > cfg.max_cluster_depth_mad_m:
+        return None
+    candidate_cam = np.median(center_points, axis=0)
+    return candidate_cam, center_idx, z_mad
+
+
 def _pca_normal(points_cam_m: np.ndarray) -> np.ndarray:
     centered = points_cam_m - points_cam_m.mean(axis=0, keepdims=True)
     cov = centered.T @ centered / max(points_cam_m.shape[0] - 1, 1)
@@ -98,6 +183,7 @@ def _candidate_covariance_world(
     normal_cam: np.ndarray,
     mask: np.ndarray,
     score: float,
+    quality_scale: float,
     T_world_cam: np.ndarray,
     jitter_m2: float,
 ) -> tuple[np.ndarray, float]:
@@ -114,7 +200,9 @@ def _candidate_covariance_world(
 
     detector_quality = max(float(score), 0.05)
     count_quality = min(1.0, cluster_cam_m.shape[0] / 200.0)
-    confidence = float(np.clip(detector_quality * view_quality * count_quality / boundary_factor, 0.0, 1.0))
+    confidence = float(
+        np.clip(detector_quality * view_quality * count_quality * quality_scale / boundary_factor, 0.0, 1.0)
+    )
 
     depth_std = max(0.0015, 0.003 * z)
     normal_var = (depth_std**2) / (view_quality**2)
@@ -153,6 +241,8 @@ def estimate_observation_from_box(
     Return type: ``NippleObservation`` or ``None`` when clustering fails.
     """
     cfg = config or Nipple3DConfig()
+    if float(score) < cfg.min_detector_score:
+        return None
     h, w = perception.breast_mask.shape
     clipped = _clip_box(box_xyxy, w, h)
     if clipped is None:
@@ -175,22 +265,51 @@ def estimate_observation_from_box(
         return None
     cluster = points_cam[cluster_idx]
     cluster_pixels = pixels_uv[cluster_idx]
+    filtered = _filter_cluster_by_depth_mad(cluster, cluster_pixels, cfg)
+    if filtered is None:
+        return None
+    cluster, cluster_pixels = filtered
     centroid = cluster.mean(axis=0)
     normal = _orient_normal_away_from_camera(_pca_normal(cluster), centroid)
-    signed = (cluster - centroid) @ normal
-    candidate_cam = cluster[int(np.argmax(signed))]
+    tip_candidate = _robust_tip_candidate_cam(cluster, normal, cfg)
+    center_candidate = _robust_center_candidate_cam(cluster, cluster_pixels, box_xyxy, cfg)
+    if tip_candidate is None and center_candidate is None:
+        return None
+    if tip_candidate is None:
+        candidate_cam, support_idx, center_mad = center_candidate  # type: ignore[misc]
+        quality_scale = float(np.clip(cfg.max_cluster_depth_mad_m / max(center_mad, 0.001), 0.25, 1.0))
+    elif center_candidate is None:
+        candidate_cam, support_idx, top_mad = tip_candidate
+        quality_scale = float(np.clip(cfg.max_tip_signed_mad_m / max(top_mad, 0.001), 0.25, 1.0))
+    else:
+        tip_cam, tip_idx, top_mad = tip_candidate
+        center_cam, center_idx, center_mad = center_candidate
+        disagreement_m = float(np.linalg.norm(tip_cam - center_cam))
+        center_weight = float(cfg.center_candidate_weight)
+        candidate_cam = center_weight * center_cam + (1.0 - center_weight) * tip_cam
+        support_idx = center_idx
+        top_quality = cfg.max_tip_signed_mad_m / max(top_mad, 0.001)
+        center_quality = cfg.max_cluster_depth_mad_m / max(center_mad, 0.001)
+        if disagreement_m <= cfg.max_tip_center_distance_m:
+            disagreement_quality = 1.0
+        else:
+            disagreement_quality = max(0.5, cfg.max_tip_center_distance_m / max(disagreement_m, 0.001))
+        quality_scale = float(np.clip(min(center_quality, max(0.5, top_quality), disagreement_quality), 0.25, 1.0))
     candidate_h = np.append(candidate_cam, 1.0)
     candidate_world = (extrinsic.T_world_cam @ candidate_h)[:3]
     cov_world, confidence = _candidate_covariance_world(
         cluster,
-        cluster_pixels,
+        cluster_pixels[support_idx],
         candidate_cam,
         normal,
         perception.breast_mask,
         score,
+        quality_scale,
         extrinsic.T_world_cam,
         cfg.covariance_jitter_m2,
     )
+    if confidence < cfg.min_observation_confidence:
+        return None
     return NippleObservation(
         cam_id=frame.cam_id,
         side=side,
@@ -303,6 +422,41 @@ def _information_fuse(observations: list[NippleObservation], jitter_m2: float) -
     return mean, cov_fused
 
 
+def _max_pairwise_distance_m(observations: list[NippleObservation]) -> float:
+    max_dist = 0.0
+    for i, lhs in enumerate(observations):
+        for rhs in observations[i + 1 :]:
+            dist = float(np.linalg.norm(lhs.point_world_m - rhs.point_world_m))
+            max_dist = max(max_dist, dist)
+    return max_dist
+
+
+def _best_consistent_subset(
+    observations: list[NippleObservation],
+    max_pairwise_distance_m: float,
+) -> tuple[list[NippleObservation], list[NippleObservation]]:
+    if len(observations) <= 1:
+        return list(observations), []
+    best: list[NippleObservation] = []
+    best_score = -1.0
+    count = len(observations)
+    for mask in range(1, 1 << count):
+        subset = [observations[idx] for idx in range(count) if mask & (1 << idx)]
+        if len(subset) < 2:
+            continue
+        if _max_pairwise_distance_m(subset) > max_pairwise_distance_m:
+            continue
+        score = float(len(subset) * 10.0 + sum(obs.confidence for obs in subset))
+        if score > best_score:
+            best = subset
+            best_score = score
+    if not best:
+        return [], list(observations)
+    best_ids = {id(obs) for obs in best}
+    rejected = [obs for obs in observations if id(obs) not in best_ids]
+    return best, rejected
+
+
 def fuse_side_observations(
     side: str,
     observations: list[NippleObservation],
@@ -326,6 +480,15 @@ def fuse_side_observations(
             used_cameras=[],
             rejected_cameras=[],
         )
+    if len(observations) < cfg.min_fused_observations:
+        return FusedNipple(
+            side=nipple_side,
+            mean_world_m=np.zeros(3, dtype=np.float64),
+            covariance_world_m2=np.eye(3, dtype=np.float64) * 1e6,
+            confidence=0.0,
+            used_cameras=[],
+            rejected_cameras=[obs.cam_id for obs in observations],
+        )
     used = list(observations)
     rejected: list[NippleObservation] = []
     if len(used) > 2:
@@ -339,6 +502,21 @@ def fuse_side_observations(
         if robust_kept:
             used = robust_kept
             rejected.extend(robust_rejected)
+
+    consistent, pairwise_rejected = _best_consistent_subset(used, cfg.max_pairwise_nipple_distance_m)
+    if len(used) >= 2 and not consistent:
+        rejected.extend(pairwise_rejected)
+        return FusedNipple(
+            side=nipple_side,
+            mean_world_m=np.zeros(3, dtype=np.float64),
+            covariance_world_m2=np.eye(3, dtype=np.float64) * 1e6,
+            confidence=0.0,
+            used_cameras=[],
+            rejected_cameras=[obs.cam_id for obs in rejected],
+        )
+    if consistent:
+        used = consistent
+        rejected.extend(pairwise_rejected)
 
     mean, cov = _information_fuse(used, cfg.covariance_jitter_m2)
     if len(used) > 2:
