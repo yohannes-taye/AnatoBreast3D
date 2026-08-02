@@ -18,7 +18,12 @@ runs/
 work_dirs/
 active_learning/dataset/
 active_learning/dataset_repeat*/
+active_learning/dataset_*/
 active_learning/checkpoints/
+tmp/
+tests/multiviews/
+tests/*.png
+configs/recon3d/*.bak.json
 
 # local IDE/assistant settings
 .vscode/

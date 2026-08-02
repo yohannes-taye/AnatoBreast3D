@@ -1,4 +1,4 @@
-# BreastSegTrack
+# AnatoBreast3D
 
 ## Markerless Patient-Specific Breast Surface Mapping for Deformation-Aware Mixed-Reality Surgical Guidance
 
@@ -7,17 +7,23 @@
 **Affiliation:** Auckland Bioengineering Institute, University of Auckland,
 Auckland, New Zealand
 
-BreastSegTrack is an academic and engineering prototype for markerless,
-patient-specific breast surface mapping from calibrated multi-view RGB-D cameras.
-The system combines breast-specific RGB segmentation, nipple localisation,
-depth-to-color aligned Orbbec capture, Charuco-based multi-camera calibration,
-masked point-cloud fusion, live browser visualization, and an interactive
+AnatoBreast3D is the software implementation of the **BreastSegTrack** research
+project: an academic and engineering prototype for markerless, patient-specific
+breast surface mapping from calibrated multi-view RGB-D cameras. The system
+combines breast-specific RGB segmentation, nipple localisation, depth-to-color
+aligned Orbbec capture, Charuco-based multi-camera calibration, anatomy-guided
+point-cloud fusion, live browser visualization, and an interactive
 active-learning loop for improving segmentation quality during use.
 
 The long-term target is deformation-aware mixed-reality surgical guidance:
-instead of relying on a single static overlay, the system reconstructs and tracks
-the visible breast surface so that patient-specific 3D coordinates can be updated
-as the breast is positioned or manipulated.
+instead of relying on a single static overlay, the system reconstructs the
+visible breast surface and its anatomical anchors so that patient-specific 3D
+coordinates can be updated as the breast is positioned or manipulated.
+
+**Current stage.** Inter-view alignment is *rigid* (nipple-anchored, robust
+point-to-plane ICP). Non-rigid deformation estimation is not implemented yet; the
+reconstructed surface and fused nipple anchors are the intended inputs to that
+future stage. See [Roadmap](#roadmap).
 
 This repository is a research prototype for technical evaluation, algorithm
 development, and non-diagnostic visualization. It is not a clinical decision
@@ -51,13 +57,30 @@ RGB-D reconstruction, visualization, and active-learning parts of BreastSegTrack
 - multitask breast segmentation and nipple detection;
 - Charuco-based multi-camera extrinsic calibration;
 - mask-filtered depth back-projection and multi-view point-cloud fusion;
+- nipple-anchored rigid registration (robust point-to-plane ICP) with
+  post-fusion cleanup and reconstruction quality metrics;
 - browser-based live visualization of RGB, depth, masks, nipple detections, and
   fused 3D surface;
 - interactive active-learning annotation and fine-tuning infrastructure.
 
-Downstream surgical registration, MR headset integration, and formal clinical
-workflow validation are treated as research extensions on top of this engineering
-base.
+Non-rigid deformation estimation, downstream surgical registration, MR headset
+integration, and formal clinical workflow validation are treated as research
+extensions on top of this engineering base.
+
+## Roadmap
+
+| Stage | Status |
+| --- | --- |
+| Multi-view RGB-D capture, D2C alignment, Charuco calibration | implemented |
+| Breast segmentation + nipple detection | implemented |
+| 3D nipple fusion and anatomical anchors | implemented |
+| Nipple-anchored **rigid** registration (robust ICP) | implemented |
+| Guided fusion, post-fusion cleanup, quality metrics | implemented |
+| Live viewer + active-learning loop | implemented |
+| Optional TSDF fusion | present, off by default |
+| **Non-rigid deformation estimation / surface tracking** | not implemented |
+| MR headset overlay integration | not implemented |
+| Clinical workflow validation | not implemented |
 
 ## System Overview
 
@@ -67,10 +90,11 @@ base.
   -> RGB breast segmentation and nipple detection
   -> mask-filtered depth back-projection
   -> Charuco T_world_cam transformation
+  -> nipple-anchored rigid registration (robust ICP)
   -> multi-view point-cloud fusion and optional surface cleanup
   -> patient-specific breast surface map
-  -> deformation-aware tracking / MR overlay coordinates
   -> live browser visualization and active-learning annotation
+  -> [future] deformation-aware tracking / MR overlay coordinates
 ```
 
 The mathematical back-projection for each valid masked depth pixel is:
@@ -92,18 +116,33 @@ map must have the same height and width. This is the key contract that allows
 configs/
   breastseg/                 RGB perception model configs
   recon3d/                   camera rig, fusion, and extrinsic configs
-recon3d/
+recon3d/                     reference pipeline (kept unmodified as a baseline)
   sensors/                   Orbbec, replay, mock, and multi-camera rig code
   calibration/               Charuco detection and extrinsic estimation
   perception/                BreastSeg inference adapter
   geometry/                  cleanup, masked back-projection, fusion, nipple 3D logic
   smoothing/                 temporal filters
   pipeline.py                reference RGB-D reconstruction pipeline
+anatomy_guided_recon3d/      active development path: anatomy-guided pipeline
+  geometry/
+    nipple3d.py              per-camera 3D nipple estimation
+    nipple_registration.py   nipple-anchored robust point-to-plane ICP
+    guided_fusion.py         nipple-gated per-view accept/reject and weighting
+    post_cleanup.py          radius outlier + nipple-aware component retention
+    tsdf_fusion.py           optional TSDF backend (off by default)
+    quality_metrics.py       cross-camera RMSE and temporal repeatability
+  pipeline.py                anatomy-guided reconstruction pipeline
+  cli.py                     calibrate | record | run | replay
+nets/                        segmentation/detection model definitions
+data_preprocess/             dataset conversion, splits, and augmentation
 tools/
   run_recon3d_live.py        thin launcher for python -m recon3d.cli run --visualize
   serve_recon3d_viewer.py    browser viewer, SDK bag replay, active-learning API
   inspect_charuco_board.py   board/camera inspection utility
+  calibrate_depth.py         depth calibration utility
   train_breastseg.py         segmentation and detection training entry point
+  build_active_learning_repeat_dataset.py
+                             repeat/augmented dataset builder for fine-tuning
 viewer/
   live.html                  realtime browser dashboard
   active_learning.js/css     annotation UI mounted inside the live viewer
@@ -111,6 +150,8 @@ active_learning/
   dataset/                   saved live labels in BreastSeg training format
   configs/                   short fine-tuning config
   training.py                API-triggered fine-tuning launcher
+utils/                       shared training/metric helpers
+docs/                        quickstart, data layout, structure notes, backlog
 tests/                       unit tests for geometry, sensors, pipeline, CLI
 ```
 
@@ -169,7 +210,7 @@ stream.
 Terminal 1: browser viewer and active-learning API server.
 
 ```powershell
-cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
+cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AnatoBreast3D
 conda activate breastseg
 python tools\serve_recon3d_viewer.py --host 127.0.0.1 --port 8765 --open
 ```
@@ -178,7 +219,7 @@ Terminal 2: realtime camera capture, segmentation, fusion, live manifest writer,
 and Rerun publisher.
 
 ```powershell
-cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AntatoBreast3D
+cd E:\OneDrive\CodeSpace\TDSegmentation\Breast-Segmentation\AnatoBreast3D
 conda activate breastseg
 python -m recon3d.cli run --config configs\recon3d\default.yaml --out runs\recon3d_live --visualize
 ```
@@ -356,8 +397,13 @@ active_learning/checkpoints/<run_id>/best.pth
   errors in segmentation become depth boundary artifacts and can appear as point
   cloud drag or flying edges.
 - Nipple detections are used as anatomical anchors for cross-view consistency and
-  downstream deformable registration, but they must be visually verified when the
-  RGB detector is uncertain or partially occluded.
+  are the intended correspondence input for future deformable registration, but
+  they must be visually verified when the RGB detector is uncertain or partially
+  occluded.
+- Inter-view alignment is rigid. Residual mismatch that survives ICP is a genuine
+  signal (calibration drift, sync error, or true tissue deformation) and should
+  be inspected in `nipple_registration.json` and `quality_metrics.json` rather
+  than smoothed away by post-processing.
 - Erosion, depth-gradient filtering, voxel downsampling, statistical outlier
   removal, Poisson meshing, cropping, and Laplacian smoothing are engineering
   post-processing options. They can improve visual smoothness, but they should
@@ -385,6 +431,7 @@ conda activate breastseg
 python -m pytest
 ruff check .
 mypy recon3d --strict
+mypy anatomy_guided_recon3d --strict
 ```
 
 Useful runtime inspections:
@@ -401,6 +448,8 @@ Additional project notes:
 - `docs/QUICKSTART.md`
 - `docs/PROJECT_STRUCTURE.md`
 - `docs/DATA_LAYOUT.md`
+- `docs/BACKLOG.md`
+- `anatomy_guided_recon3d/README.md`
 - `active_learning/README.md`
 
 ## Citation
@@ -411,6 +460,7 @@ If this system is used in academic work, cite the project as:
 Xia, L., Xiao, Z., Bai, H., and Billinghurst, M. BreastSegTrack: Markerless
 Patient-Specific Breast Surface Mapping for Deformation-Aware Mixed-Reality
 Surgical Guidance. Auckland Bioengineering Institute, University of Auckland.
+Software: AnatoBreast3D.
 ```
 
 For reproducibility, report the hardware calibration, Charuco board geometry,
