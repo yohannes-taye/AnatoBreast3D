@@ -193,16 +193,26 @@
     display: grid;
     gap: 10px;
     align-content: start;
-    overflow: hidden;
   }
 
   .left-rail {
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  #liveRunPanel {
+    order: 2;
+  }
+
+  #replayPanel {
+    order: 3;
   }
 
   .right-rail {
     grid-template-rows: minmax(0, 1fr) auto;
     align-content: stretch;
+    overflow: hidden;
   }
 
   .stage {

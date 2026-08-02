@@ -5,13 +5,24 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 from PIL import Image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from data_preprocess.aug_ops import affine_warp, horizontal_flip  # noqa: E402
+
+
+AUG_TOKEN = "_aug"
+MIN_BOX_SIDE_PX = 4.0
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -53,7 +64,117 @@ def _safe_prepare_dst(src: Path, dst: Path, overwrite: bool) -> None:
         (dst / subdir).mkdir(parents=True, exist_ok=True)
 
 
-def _load_source_samples(src: Path) -> list[dict[str, Any]]:
+def _normalize_date_from(value: str | None) -> str | None:
+    if not value:
+        return None
+    token = "".join(ch for ch in value if ch.isdigit())
+    if len(token) != 8:
+        raise ValueError(f"--date-from must be YYYYMMDD or YYYY-MM-DD, got: {value}")
+    return token
+
+
+def _is_augmented_name(name: str) -> bool:
+    return AUG_TOKEN in Path(name).stem
+
+
+def _sample_date_key(sample_id: str, file_name: str) -> str | None:
+    for value in (sample_id, Path(file_name).stem):
+        token = value[:8]
+        if len(token) == 8 and token.isdigit():
+            return token
+    return None
+
+
+def _sample_aug_params(rng: np.random.Generator) -> dict[str, Any]:
+    return {
+        "flip": bool(rng.random() < 0.5),
+        "angle": float(rng.uniform(-15.0, 15.0)),
+        "scale": float(rng.uniform(0.85, 1.15)),
+        "tx": float(rng.uniform(-0.08, 0.08)),
+        "ty": float(rng.uniform(-0.08, 0.08)),
+        "brightness": float(rng.uniform(-18.0, 18.0)),
+        "contrast": float(rng.uniform(0.85, 1.15)),
+        "hue": float(rng.uniform(-10.0, 10.0)),
+        "sat": float(rng.uniform(0.85, 1.15)),
+        "val": float(rng.uniform(0.85, 1.15)),
+        "gamma": float(rng.uniform(0.8, 1.2)),
+        "blur": bool(rng.random() < 0.25),
+        "noise": float(rng.uniform(0.0, 4.0)) if rng.random() < 0.4 else 0.0,
+    }
+
+
+def _photometric(image: np.ndarray, params: dict[str, Any], rng: np.random.Generator) -> np.ndarray:
+    img = image.astype(np.float32)
+    img = (img - 128.0) * params["contrast"] + 128.0 + params["brightness"]
+    img = np.clip(img, 0, 255).astype(np.uint8)
+
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[..., 0] = (hsv[..., 0] + params["hue"]) % 180
+    hsv[..., 1] = np.clip(hsv[..., 1] * params["sat"], 0, 255)
+    hsv[..., 2] = np.clip(hsv[..., 2] * params["val"], 0, 255)
+    img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
+
+    lut = np.clip((np.linspace(0, 1, 256) ** (1.0 / params["gamma"])) * 255.0, 0, 255).astype(np.uint8)
+    img = cv2.LUT(img, lut)
+
+    if params["blur"]:
+        img = cv2.GaussianBlur(img, (3, 3), 0)
+    if params["noise"] > 0:
+        noise = rng.normal(0.0, params["noise"], img.shape).astype(np.float32)
+        img = np.clip(img.astype(np.float32) + noise, 0, 255).astype(np.uint8)
+    return img
+
+
+def _make_augmented_assets(
+    sample: dict[str, Any],
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray, list[list[float]], dict[str, Any]]:
+    image = cv2.imread(str(sample["image_path"]), cv2.IMREAD_COLOR)
+    mask = cv2.imread(str(sample["mask_path"]), cv2.IMREAD_GRAYSCALE)
+    if image is None or mask is None:
+        raise FileNotFoundError(f"Missing image or mask for source sample: {sample['file_name']}")
+    mask = (mask > 0).astype(np.uint8)
+    boxes = np.asarray(sample["boxes"], dtype=np.float32)
+
+    for _ in range(30):
+        params = _sample_aug_params(rng)
+        aug_image = image.copy()
+        aug_mask = mask.copy()
+        aug_boxes = boxes.copy()
+        if params["flip"]:
+            aug_image, aug_mask, aug_boxes = horizontal_flip(aug_image, aug_mask, aug_boxes)
+        h, w = aug_image.shape[:2]
+        aug_image, aug_mask, aug_boxes = affine_warp(
+            aug_image,
+            aug_mask,
+            aug_boxes,
+            angle=params["angle"],
+            scale=params["scale"],
+            tx_px=params["tx"] * w,
+            ty_px=params["ty"] * h,
+            image_border=(128, 128, 128),
+            mask_border=0,
+            min_box_side=MIN_BOX_SIDE_PX,
+        )
+        if aug_boxes.shape[0] == boxes.shape[0]:
+            aug_image = _photometric(aug_image, params, rng)
+            aug_mask = (aug_mask > 0).astype(np.uint8)
+            return (
+                aug_image,
+                aug_mask,
+                [[float(value) for value in box] for box in aug_boxes.tolist()],
+                params,
+            )
+
+    raise ValueError(f"Unable to keep all nipple boxes after augmentation: {sample['label_path']}")
+
+
+def _load_source_samples(
+    src: Path,
+    *,
+    date_from: str | None = None,
+    include_existing_augmented: bool = True,
+) -> list[dict[str, Any]]:
     labels_dir = src / "labels"
     if not labels_dir.is_dir():
         raise FileNotFoundError(f"Missing labels directory: {labels_dir}")
@@ -62,6 +183,11 @@ def _load_source_samples(src: Path) -> list[dict[str, Any]]:
         label = _read_json(label_path)
         sample_id = str(label.get("sample_id") or label_path.stem)
         file_name = str(label.get("file_name") or label.get("image") or f"{sample_id}.png")
+        if not include_existing_augmented and _is_augmented_name(file_name):
+            continue
+        sample_date = _sample_date_key(sample_id, file_name)
+        if date_from is not None and (sample_date is None or sample_date < date_from):
+            continue
         boxes = label.get("nipple_boxes_xyxy") or []
         if len(boxes) != 2:
             raise ValueError(f"{label_path} has {len(boxes)} nipple boxes; expected exactly 2.")
@@ -97,34 +223,52 @@ def _copy_sample(
     repeat_index: int,
     image_id: int,
     ann_id_start: int,
+    augment: bool = False,
+    rng: np.random.Generator | None = None,
 ) -> tuple[str, dict[str, Any], list[dict[str, Any]], dict[str, Any], int]:
     new_file_name = f"{new_stem}.png"
-    shutil.copy2(sample["image_path"], dst / "images" / new_file_name)
-    shutil.copy2(sample["mask_path"], dst / "sem_masks" / new_file_name)
+    boxes = [[float(value) for value in box] for box in sample["boxes"]]
+    width = int(sample["width"])
+    height = int(sample["height"])
+    transform: dict[str, Any] | None = None
+
+    if augment:
+        if rng is None:
+            raise ValueError("rng is required when augment=True.")
+        image_bgr, mask, boxes, transform = _make_augmented_assets(sample, rng)
+        height, width = mask.shape[:2]
+        cv2.imwrite(str(dst / "images" / new_file_name), image_bgr)
+        cv2.imwrite(str(dst / "sem_masks" / new_file_name), mask)
+    else:
+        shutil.copy2(sample["image_path"], dst / "images" / new_file_name)
+        shutil.copy2(sample["mask_path"], dst / "sem_masks" / new_file_name)
 
     label_payload = dict(sample["label"])
     label_payload.update(
         {
             "sample_id": new_stem,
             "file_name": new_file_name,
-            "nipple_boxes_xyxy": sample["boxes"],
+            "nipple_boxes_xyxy": boxes,
             "repeat_role": role,
             "repeat_index": repeat_index,
             "source_sample_id": sample["sample_id"],
             "source_file_name": sample["file_name"],
         }
     )
+    if transform is not None:
+        label_payload["source"] = "augmentation"
+        label_payload["transform"] = transform
     _write_json(dst / "labels" / f"{new_stem}.json", label_payload)
 
     image_record = {
         "id": image_id,
         "file_name": new_file_name,
-        "width": sample["width"],
-        "height": sample["height"],
+        "width": width,
+        "height": height,
     }
     annotations: list[dict[str, Any]] = []
     ann_id = ann_id_start
-    for box in sample["boxes"]:
+    for box in boxes:
         x1, y1, x2, y2 = [float(value) for value in box]
         box_width = x2 - x1
         box_height = y2 - y1
@@ -144,9 +288,20 @@ def _copy_sample(
     return new_file_name, image_record, annotations, label_payload, ann_id
 
 
-def build_repeat_dataset(src: Path, dst: Path, repeat: int, overwrite: bool) -> dict[str, Any]:
+def build_repeat_dataset(
+    src: Path,
+    dst: Path,
+    repeat: int,
+    overwrite: bool,
+    *,
+    date_from: str | None = None,
+    include_existing_augmented: bool = True,
+    augment_train: bool = False,
+    seed: int = 23,
+) -> dict[str, Any]:
     if repeat < 1:
         raise ValueError("--repeat must be at least 1.")
+    date_from = _normalize_date_from(date_from)
     src = src.resolve()
     dst = dst.resolve()
     _safe_prepare_dst(src, dst, overwrite)
@@ -158,19 +313,27 @@ def build_repeat_dataset(src: Path, dst: Path, repeat: int, overwrite: bool) -> 
     annotations: list[dict[str, Any]] = []
     image_id = 1
     ann_id = 1
-    samples = _load_source_samples(src)
+    samples = _load_source_samples(
+        src,
+        date_from=date_from,
+        include_existing_augmented=include_existing_augmented,
+    )
+    rng = np.random.default_rng(seed)
 
     for sample in samples:
         for repeat_index in range(1, repeat + 1):
-            new_stem = f"{sample['stem']}_tr{repeat_index:02d}"
+            suffix = "augtr" if augment_train else "tr"
+            new_stem = f"{sample['stem']}_{suffix}{repeat_index:02d}"
             file_name, image_record, anns, label_payload, ann_id = _copy_sample(
                 sample=sample,
                 dst=dst,
                 new_stem=new_stem,
-                role="train",
+                role="train_augmented" if augment_train else "train",
                 repeat_index=repeat_index,
                 image_id=image_id,
                 ann_id_start=ann_id,
+                augment=augment_train,
+                rng=rng,
             )
             train_names.append(file_name)
             images.append(image_record)
@@ -213,6 +376,10 @@ def build_repeat_dataset(src: Path, dst: Path, repeat: int, overwrite: bool) -> 
         "source": str(src),
         "destination": str(dst),
         "source_samples": len(samples),
+        "date_from": date_from,
+        "include_existing_augmented": include_existing_augmented,
+        "augment_train": augment_train,
+        "seed": seed,
         "repeat": repeat,
         "train_samples": len(train_names),
         "val_samples": len(val_names),
@@ -228,12 +395,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dst", default="active_learning/dataset_repeat3", help="Destination dataset root.")
     parser.add_argument("--repeat", type=int, default=3, help="Train copies per source sample.")
     parser.add_argument("--overwrite", action="store_true", help="Replace destination if it already exists.")
+    parser.add_argument("--date-from", help="Keep samples whose filename date is >= YYYYMMDD.")
+    parser.add_argument(
+        "--exclude-existing-augmented",
+        action="store_true",
+        help="Skip source files whose stem already contains '_aug'.",
+    )
+    parser.add_argument("--augment-train", action="store_true", help="Apply offline augmentation to train repeats.")
+    parser.add_argument("--seed", type=int, default=23, help="RNG seed for train-repeat augmentation.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    summary = build_repeat_dataset(Path(args.src), Path(args.dst), args.repeat, args.overwrite)
+    summary = build_repeat_dataset(
+        Path(args.src),
+        Path(args.dst),
+        args.repeat,
+        args.overwrite,
+        date_from=args.date_from,
+        include_existing_augmented=not args.exclude_existing_augmented,
+        augment_train=args.augment_train,
+        seed=args.seed,
+    )
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 
