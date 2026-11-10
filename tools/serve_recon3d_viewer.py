@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 from active_learning.annotation_store import dataset_summary, save_annotation  # noqa: E402
 from active_learning.training import latest_status, launch_finetune  # noqa: E402
+from anatomy_guided_recon3d.tracking import service as point_tracking  # noqa: E402
 
 
 DEFAULT_REPLAY_CONFIG = Path("configs") / "recon3d" / "default.yaml"
@@ -533,10 +534,28 @@ class ViewerHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/live/status":
             self._send_json(live_status(self._project_root()))
             return
+        if self.path == "/api/point-tracking/status":
+            self._send_json(point_tracking.get_status(self._project_root()))
+            return
         super().do_GET()
 
     def do_POST(self) -> None:  # noqa: N802 - http.server naming
         try:
+            if self.path in {"/api/live/start", "/api/replay/start"} and point_tracking.preview_running(self._project_root()):
+                raise ValueError("Stop the recording preview before starting live reconstruction or bag replay")
+            if self.path == "/api/point-tracking/preview":
+                if _live_running_locked() or _replay_running_locked():
+                    raise ValueError("Stop live reconstruction and replay before opening the recording preview")
+                self._send_json(point_tracking.start_preview(self._project_root()))
+                return
+            if self.path == "/api/point-tracking/command":
+                self._send_json(point_tracking.preview_command(self._project_root(), self._read_json()))
+                return
+            if self.path == "/api/point-tracking/start":
+                payload = self._read_json()
+                session = _resolve_replay_session(self._project_root(), str(payload.get("session") or ""))
+                self._send_json(point_tracking.start_tracking(self._project_root(), session, payload.get("camera")))
+                return
             if self.path == "/api/active-learning/annotation":
                 self._send_json(save_annotation(self._project_root(), self._read_json()))
                 return

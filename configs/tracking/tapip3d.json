@@ -1,0 +1,15 @@
+{
+  "upstream_repo": "../tools/tracking/TAPIP3D",
+  "upstream_revision": "4cb7e69a1687f67d56ec3e506768f51f2c581b46",
+  "checkpoint": "../tools/tracking/checkpoints/tapip3d_final.pth",
+  "python": "../tools/tracking/.venv/Scripts/python.exe",
+  "device": "cuda",
+  "knn_backend": "torch",
+  "frames": 16,
+  "stride": 3,
+  "max_side": 512,
+  "max_points": 128,
+  "num_iters": 6,
+  "support_grid_size": 8,
+  "visibility_threshold": 0.9
+}
