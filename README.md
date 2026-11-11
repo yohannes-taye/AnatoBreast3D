@@ -1,3 +1,28 @@
+# AnatoBreast3D — calibrated RGB-D recording and point tracking
+
+This fork adds a two-camera recording screen, interactive calibrated 3D inspection,
+recorded RGB-D playback, camera frustums and offline TAPIP3D surface tracking to
+[AnatoBreast3D](https://github.com/LY-DerekX/AnatoBreast3D).
+
+**Start here: [Illustrated setup and recording guide](docs/RECORDING_SETUP.md)**
+
+![Two-camera RGB-D recording and 3D inspection screen](docs/images/recording-live.jpg)
+
+- Inspect photographic colour, depth, shaded surfaces, point clouds, overlap,
+  surface normals, wireframe and cross-camera gaps.
+- See camera positions and fields of view from their calibrated intrinsics and extrinsics.
+- Record both cameras, save the calibration with each clip, then play, pause,
+  seek and step through synchronized camera images and 3D geometry.
+- Track up to 128 surface points through recorded frames with the official
+  TAPIP3D model. Continuous live tracking is a later stage.
+
+Use your own camera calibration and trained breast segmentation checkpoint.
+The guide includes environment setup, camera serial configuration, screenshots
+and common fixes. Method details and coordinate conventions are in
+[POINT_TRACKING.md](docs/POINT_TRACKING.md).
+
+---
+
 # AnatoBreast3D
 
 ## Markerless Patient-Specific Breast Surface Mapping for Deformation-Aware Mixed-Reality Surgical Guidance

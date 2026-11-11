@@ -9,7 +9,7 @@
 #   pip install -r requirements-hardware.txt
 #
 -r requirements.txt
-pyorbbecsdk
+pyorbbecsdk2==2.1.3
 # Live viewer streaming (tools/live_recon.py). 0.23.1 is the last release that
 # supports numpy 1.x; 0.24+ require numpy>=2 which conflicts with pyorbbecsdk2
 # and open3d 0.18. Pin pyarrow to a numpy-1.26-compatible build to match.

@@ -139,6 +139,11 @@ celerybeat.pid
 # Environments
 .env
 .venv
+# Workstation-specific recording setup and downloaded TAPIP3D source.
+configs/recon3d/*.local.yaml
+configs/recon3d/*.local.json
+configs/tracking/*.local.json
+third_party/TAPIP3D/
 env/
 venv/
 ENV/

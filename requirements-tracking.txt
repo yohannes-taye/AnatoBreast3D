@@ -1,0 +1,9 @@
+# Optional RGB-D TAPIP3D inference additions to the existing project runtime.
+# Use a separate environment. No MegaSAM, monocular-depth, or training stack is
+# needed when the measured RGB-D and calibrated camera poses are supplied.
+hydra-core==1.3.2
+omegaconf==2.3.0
+einops==0.8.0
+python-box==7.3.2
+rich==13.9.4
+av==12.3.0
