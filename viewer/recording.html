@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AnatoBreast3D · Record & track</title>
+<link rel="stylesheet" href="recording.css">
+<script type="importmap">{"imports":{"three":"./vendor/three.module.js"}}</script>
+</head>
+<body>
+<header><a class="brand" href="live.html"><b>AB</b><span>AnatoBreast3D<small>Capture & surface tracking</small></span></a><span id="connection" class="badge">Cameras stopped</span><a href="live.html">Reconstruction viewer ↗</a></header>
+<main>
+  <div class="intro"><div><span class="eyebrow">CALIBRATED RGB-D CAPTURE</span><h1>Frame it. Check the overlap. Record.</h1><p>Use both colour views to position the phantom, then compare the camera colours in 3D.</p></div><div class="actions"><button id="preview" class="primary">Start camera preview</button><button id="stop" disabled>Stop preview</button></div></div>
+  <div id="error" role="alert" hidden></div>
+  <div class="camera-options"><label>Camera images <select id="feedMode"><option value="color">Colour</option><option value="depth">Depth only</option><option value="blend">Colour + depth</option><option value="mask">Breast outline</option></select></label><span>Colour and aligned depth share the same image grid.</span></div>
+  <section class="camera-grid" id="cameras">
+    <article class="card camera"><div class="card-head"><h2>Camera 1 <i class="cyan"></i></h2><span id="cam1meta">Waiting for preview</span></div><div class="image-stack"><img id="cam1rgb" alt="Camera 1 colour preview" hidden><img id="cam1depth" class="depth" alt="Camera 1 aligned depth overlay" hidden><img id="cam1mask" class="mask-overlay" alt="Camera 1 detected breast outline" hidden><span class="placeholder" id="cam1empty">Start preview to frame the phantom</span><div class="crosshair"></div></div></article>
+    <article class="card camera"><div class="card-head"><h2>Camera 2 <i class="orange"></i></h2><span id="cam2meta">Waiting for preview</span></div><div class="image-stack"><img id="cam2rgb" alt="Camera 2 colour preview" hidden><img id="cam2depth" class="depth" alt="Camera 2 aligned depth overlay" hidden><img id="cam2mask" class="mask-overlay" alt="Camera 2 detected breast outline" hidden><span class="placeholder" id="cam2empty">Colour and depth share the same image grid</span><div class="crosshair"></div></div></article>
+  </section>
+  <div class="lower-grid">
+    <section class="card geometry" id="geometryPanel">
+      <div class="card-head"><h2 id="sceneTitle">3D camera overlap</h2><div class="geometry-actions"><button id="showOverlap" hidden>Live overlap</button><button id="freeze">Freeze 3D</button><button id="expand">Expand</button><button id="reset">Reset view</button></div></div>
+      <div id="viewControls">
+        <div class="scene-options">
+          <label>View<select id="viewMode"><option value="color">Photographic colour</option><option value="camera">Camera colours · alignment</option><option value="color-points">Colour point cloud</option><option value="shape">Shaded surface</option><option value="depth">Depth only</option><option value="gap">Camera separation</option><option value="transparent">Transparent overlap</option><option value="normals">Surface normals</option><option value="wire">Wireframe</option></select></label>
+          <label>Area<select id="scope"><option value="breast_area">Full breast area</option><option value="breast">Detected breast only</option><option value="scene">Whole scene</option></select></label>
+          <label>Detail<select id="detail"><option value="fast">Fast</option><option value="balanced" selected>Balanced</option><option value="fine">Fine</option></select></label>
+        </div>
+        <div class="view-presets" aria-label="3D viewpoints"><span>Look from</span><button data-view="orbit">Angled</button><button data-view="front">Front</button><button data-view="side">Side</button><button data-view="top">Top</button><button data-view="camera1">Camera 1</button><button data-view="camera2">Camera 2</button></div>
+      </div>
+      <div id="scene"><div id="sceneEmpty">The saved calibration places both camera clouds in the same 3D space.</div><span id="frozenBadge" hidden>3D paused · camera images remain live</span></div>
+      <div id="sceneLegend" hidden></div><div id="sceneInfo" aria-live="polite">Waiting for 3D preview</div>
+      <div class="scene-tools"><label><input id="cam1visible" type="checkbox" checked> <i class="cyan"></i> Camera 1</label><label><input id="cam2visible" type="checkbox" checked> <i class="orange"></i> Camera 2</label><label><input id="frustums" type="checkbox"> Camera frustums</label><button id="fitCameras">Fit cameras</button><label><input id="axes" type="checkbox" checked> Axes</label><label><input id="grid" type="checkbox"> Grid</label></div>
+      <details id="displaySettings"><summary>Display settings</summary><div class="scene-settings"><label>Point size <span id="pointSizeText">2 mm</span><input id="pointSize" type="range" min="0.5" max="6" value="2" step="0.5"></label><label>Opacity <span id="opacityText">100%</span><input id="opacity" type="range" min="15" max="100" value="100"></label><label>Near depth (m)<input id="near" type="number" min="0.1" max="3" step="0.05" value="0.3"></label><label>Far depth (m)<input id="far" type="number" min="0.1" max="3" step="0.05" value="1.0"></label><button id="range">Apply range</button></div><p class="hint">Recordings keep the original colour and depth. Drag to rotate, right-drag to pan, and scroll to zoom.</p></details>
+      <div id="playback" hidden><button id="play">Play</button><input id="frame" aria-label="Tracking frame" type="range" min="0" max="15" value="0"><span id="frameText"></span></div>
+      <div id="clipPlayback" hidden><div class="clip-buttons"><button id="clipPrevious" aria-label="Previous recorded frame">←</button><button id="clipPlay">Play</button><button id="clipNext" aria-label="Next recorded frame">→</button><select id="clipSpeed" aria-label="Playback speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select><span id="clipTime">0.0 s</span></div><input id="clipFrame" type="range" min="0" max="1" value="0" step="1" aria-label="RGB-D recording timeline"><div id="clipFrameInfo"></div></div>
+      <div class="frustum-settings"><label>Frustum depth <input id="frustumDepth" type="range" min="0.1" max="1.2" value="0.6" step="0.05"><span id="frustumDepthText">0.60 m</span></label></div>
+      <p class="hint" id="geometryHint">Live depth surfaces show the captured geometry; hidden areas stay open.</p>
+    </section>
+    <aside>
+      <section class="card controls"><div class="card-head"><h2>Record a clip</h2><span id="recordState">Ready when you are</span></div><div class="control-body"><label class="field">Clip duration <span><input id="duration" type="number" min="1" max="60" value="6"> seconds</span></label><button id="record" class="record" disabled>● Start recording</button><p id="captureStatus" aria-live="polite">Start preview and check your framing before recording.</p><div class="facts"><span>Camera timing difference</span><b id="drift">—</b><span>Calibration</span><b id="calibration">Not loaded</b></div><label class="field">Depth over colour <input id="overlay" type="range" min="0" max="100" value="0"></label><p class="hint">Keep the cameras fixed. Moving a camera requires a new calibration. Depth overlap is a visual check; loading a calibration does not verify its accuracy.</p></div></section>
+      <section class="card controls"><div class="card-head"><h2>Recording playback</h2><span id="clipStatus">RGB-D + 3D</span></div><div class="control-body"><label class="field stacked">Recording<select id="sessions"><option>No recordings yet</option></select></label><button id="loadClip" disabled>Load recording for playback</button><p id="clipMessage" aria-live="polite">Replay both camera views and the 3D surface together. Pause, scrub, and change the view.</p><button id="showClip" hidden>Open playback</button></div></section>
+      <section class="card controls"><div class="card-head"><h2>Track a recording</h2><span id="trackingState">TAPIP3D</span></div><div class="control-body"><label class="field">Camera<select id="camera"><option value="cam2">Camera 2</option></select></label><button id="track" class="primary" disabled>Track breast surface points</button><p id="trackingStatus" aria-live="polite">Tracks one camera over time using measured depth and the saved calibration.</p><button id="showTracks" hidden>View 3D tracks</button><div id="downloads" hidden><a id="csv" download>Download CSV</a><a id="npz" download>Download 3D tracks</a></div></div></section>
+    </aside>
+  </div>
+</main>
+<script>window.addEventListener('error',function(e){var box=document.getElementById('error');box.hidden=false;box.textContent=e.message||'The recording screen could not start. Refresh this page.';});</script>
+<script type="module" src="recording.js"></script>
+</body></html>
