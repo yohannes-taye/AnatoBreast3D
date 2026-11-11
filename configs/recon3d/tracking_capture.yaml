@@ -1,0 +1,29 @@
+# Saved, physically verified two-camera calibration for the current workstation.
+output_dir: runs/point_tracking_capture
+extrinsics_path: ../tools/orbbec/calibration/20261106-213619-888567/extrinsics.json
+sync_max_drift_ms: 50.0
+hardware:
+  align_mode: sw
+  color_format: RGB
+  color_fps: 30
+  color_size: [1280, 720]
+  color_auto_exposure: true
+  wait_timeout_ms: 1000
+  apply_sync_config: false
+  cameras:
+    - id: cam1
+      serial_number: CL8T75401EJ
+      sync_mode: standalone
+    - id: cam2
+      serial_number: CL8T75400XA
+      sync_mode: standalone
+perception:
+  model_config_path: configs/breastseg/breastseg_b2_inplace.py
+  checkpoint_path: checkpoint/breastseg.pth
+  device: cuda
+  score_thr: 0.3
+  topk: 2
+  nms_iou: 0.5
+cloud_cleanup:
+  min_depth_m: 0.25
+  max_depth_m: 1.2
