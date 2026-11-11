@@ -9,11 +9,25 @@ import subprocess
 import sys
 import time
 import traceback
+import hashlib
 
 import numpy as np
+import cv2
 
 from anatomy_guided_recon3d.tracking.runtime import check_paths, read_settings, status, write_json
 from anatomy_guided_recon3d.tracking.sequence import validate_sequence
+
+
+def project_world_tracks(coords: np.ndarray, intrinsics: np.ndarray, extrinsics: np.ndarray) -> list:
+    """Project world-metre predictions back onto the matching rectified RGB grid."""
+    cameras = np.einsum('tij,tnj->tni', extrinsics[:,:3,:3], coords) + extrinsics[:,:3,3][:,None,:]
+    projected = np.einsum('tij,tnj->tni', intrinsics, cameras)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pixels = projected[:,:,:2] / projected[:,:,2:]
+    valid = np.isfinite(pixels).all(axis=-1) & (cameras[:,:,2] > 0)
+    safe = pixels.astype(object)
+    safe[~valid] = None
+    return safe.tolist()
 
 
 def make_preview(data, coords: np.ndarray, visible: np.ndarray) -> dict:
@@ -73,9 +87,20 @@ def run(input_path: Path, output: Path, settings: dict) -> dict:
     model.set_eval_mode("raw")
     model.eval().to(settings["device"])
     del checkpoint
+    # The upstream model supports chunked image encoding and maintains point
+    # identities through its own overlapping windows. Do not restart queries
+    # independently for each window of a long recording.
+    original_encode = model.encode_rgbs
+    def encoder_chunks(rgb_obs, chunk_size=None):
+        return original_encode(rgb_obs, chunk_size=chunk_size or int(settings.get("encoder_chunk_size", 8)))
+    model.encode_rgbs = encoder_chunks
     device = settings["device"]
-    video = torch.from_numpy(data["video"]).permute(0, 3, 1, 2).float().to(device) / 255.0
-    tensor = {key: torch.from_numpy(data[key]).float().to(device)
+    inference_data = dict(data)
+    if frame_count < model.seq_len:
+        for key in ("video", "depths", "intrinsics", "extrinsics"):
+            inference_data[key] = np.concatenate([data[key], np.repeat(data[key][-1:], model.seq_len-frame_count, axis=0)])
+    video = torch.from_numpy(inference_data["video"]).permute(0, 3, 1, 2).float().to(device) / 255.0
+    tensor = {key: torch.from_numpy(inference_data[key]).float().to(device)
               for key in ("depths", "intrinsics", "extrinsics", "query_point")}
     status(output, "tracking", f"Tracking {point_count} points through {frame_count} frames", frames=frame_count, points=point_count)
     # FP32 works on RTX 20-series as well as newer GPUs. The released CLI's
@@ -85,8 +110,9 @@ def run(input_path: Path, output: Path, settings: dict) -> dict:
             model=model, video=video, **tensor, num_iters=int(settings["num_iters"]),
             grid_size=int(settings["support_grid_size"]), vis_threshold=float(settings["visibility_threshold"]),
         )
-    coords = coords.float().cpu().numpy().reshape(frame_count, point_count, 3)
-    visible = visible.cpu().numpy().reshape(frame_count, point_count).astype(bool)
+    inference_frames = len(inference_data["video"])
+    coords = coords.float().cpu().numpy().reshape(inference_frames, point_count, 3)[:frame_count]
+    visible = visible.cpu().numpy().reshape(inference_frames, point_count)[:frame_count].astype(bool)
     visible &= np.isfinite(coords).all(axis=-1)
     elapsed = time.perf_counter() - started
     np.savez_compressed(output / "tracks.npz", coords_world_m=coords, visible=visible,
@@ -100,13 +126,40 @@ def run(input_path: Path, output: Path, settings: dict) -> dict:
             for n in range(point_count):
                 writer.writerow([t, int(times[t]), n, *coords[t, n].tolist(), bool(visible[t, n])])
     result = make_preview(data, coords, visible)
+    safe_pixels = project_world_tracks(coords, data["intrinsics"], data["extrinsics"])
+    frame_dir = output / "frames"
+    frame_dir.mkdir(exist_ok=True)
+    frame_paths = []
+    for index, rgb in enumerate(data["video"]):
+        path = frame_dir / f"{index:04d}.jpg"
+        if not cv2.imwrite(str(path), cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 88]):
+            raise RuntimeError("Could not save tracking review frame")
+        frame_paths.append(path.relative_to(output).as_posix())
+    result.update(pixel_tracks=safe_pixels, rgb_frames=frame_paths,
+                  video_size=[int(data["video"].shape[2]), int(data["video"].shape[1])],
+                  camera_T_world_cam=np.linalg.inv(data["extrinsics"][0]).tolist())
     try:
         revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=settings["upstream_repo"], text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         revision = "unknown"
     result["method"] = {"name": "TAPIP3D", "upstream_revision": revision, "knn_backend": settings["knn_backend"],
                         "precision": "float32", "elapsed_s": round(elapsed, 3),
-                        "visibility_threshold": settings["visibility_threshold"]}
+                        "visibility_threshold": settings["visibility_threshold"],
+                        "encoder_chunk_size": settings.get("encoder_chunk_size", 8),
+                        "window_frames": model.seq_len, "identity_policy": "upstream overlapping windows; first-frame query IDs",
+                        "inference_frames": inference_frames, "seed_source": settings.get("seed_source", "breast segmentation or supplied mask")}
+    timestamps = data.get("timestamps_ns", np.arange(frame_count))
+    initial = data["query_point"][None,:,1:]
+    motion = np.linalg.norm(coords-initial, axis=-1)*1000
+    with Path(settings["checkpoint"]).open("rb") as handle:
+        checkpoint_sha = hashlib.file_digest(handle, "sha256").hexdigest()
+    write_json(output / "tracking_report.json", dict(frames=frame_count, points=point_count,
+               duration_s=float((timestamps[-1]-timestamps[0])/1e9), visible_fraction=float(visible.mean()),
+               median_displacement_mm=float(np.median(motion[visible])) if visible.any() else None,
+               max_displacement_mm=float(np.max(motion[visible])) if visible.any() else None,
+               nonfinite_predictions=int((~np.isfinite(coords).all(axis=-1)).sum()),
+               checkpoint_sha256=checkpoint_sha, method=result["method"],
+               limitation="Integration check; geometric accuracy and occlusion recovery require measured ground truth"))
     write_json(output / "result.json", result)
     status(output, "complete", f"Tracked {point_count} points through {frame_count} frames", frames=frame_count,
            points=point_count, elapsed_s=round(elapsed, 3), result="result.json")

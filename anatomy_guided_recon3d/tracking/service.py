@@ -110,7 +110,7 @@ def preview_command(root: Path, payload: dict) -> dict:
         return get_status(root)
 
 
-def start_tracking(root: Path, session: Path, camera: str | None = None) -> dict:
+def start_tracking(root: Path, session: Path, camera: str | None = None, full_recording: bool = True) -> dict:
     global _tracking_process
     with _lock:
         if _tracking_process is not None and _tracking_process.poll() is None:
@@ -123,5 +123,7 @@ def start_tracking(root: Path, session: Path, camera: str | None = None) -> dict
         command = [settings["python"], "-m", "anatomy_guided_recon3d.tracking.cli", "--session", str(session), "--out", str(output)]
         if camera:
             command += ["--camera", str(camera)]
+        if full_recording:
+            command += ["--full-recording", "--sample-fps", "5", "--max-frames", "300", "--points", "128"]
         _tracking_process = _spawn(root, command, output)
         return get_status(root)

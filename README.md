@@ -1,5 +1,7 @@
 # AnatoBreast3D
 
+**Recorded point tracking prototype:** [TAPIP3D setup and review guide](docs/RECORDED_POINT_TRACKING.md), with a screenshot and step-by-step Windows instructions.
+
 ## Markerless Patient-Specific Breast Surface Mapping for Deformation-Aware Mixed-Reality Surgical Guidance
 
 **Authors:** Luyao Xia, Zirui Xiao, Huidong Bai, Mark Billinghurst

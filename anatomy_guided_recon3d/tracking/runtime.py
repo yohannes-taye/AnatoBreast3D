@@ -11,7 +11,8 @@ DEFAULT_CONFIG = PROJECT_ROOT / "configs" / "tracking" / "tapip3d.json"
 
 
 def read_settings(path: Path | None = None) -> dict:
-    settings = json.loads((path or DEFAULT_CONFIG).read_text(encoding="utf-8"))
+    local = DEFAULT_CONFIG.with_name("tapip3d.local.json")
+    settings = json.loads((path or (local if local.is_file() else DEFAULT_CONFIG)).read_text(encoding="utf-8"))
     for key in ("upstream_repo", "checkpoint", "python"):
         target = Path(settings[key])
         settings[key] = str((PROJECT_ROOT / target).resolve() if not target.is_absolute() else target)

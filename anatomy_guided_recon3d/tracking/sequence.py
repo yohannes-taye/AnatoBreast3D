@@ -113,8 +113,8 @@ def validate_sequence(data) -> tuple[int, int]:
     if video.ndim != 4 or video.shape[-1] != 3 or video.dtype != np.uint8:
         raise ValueError("video must be uint8 T x H x W x 3 RGB")
     T, H, W, _ = video.shape
-    if not 2 <= T <= 96 or H % 8 or W % 8:
-        raise ValueError("Use 2–96 frames and image dimensions divisible by 8")
+    if not 2 <= T <= 300 or H % 8 or W % 8:
+        raise ValueError("Use 2–300 frames and image dimensions divisible by 8")
     if depth.shape != (T, H, W) or not np.isfinite(depth).all() or np.any(depth < 0):
         raise ValueError("depths must be finite nonnegative T x H x W camera Z depths in metres")
     if not np.any(depth[0] > 0):

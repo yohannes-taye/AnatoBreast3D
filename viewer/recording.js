@@ -182,6 +182,8 @@ async function poll() {
       resultBase = tracking.base;
       $('showTracks').hidden = $('downloads').hidden = false;
       $('csv').href = resultBase+'tracks.csv'; $('npz').href = resultBase+'tracks.npz';
+      $('reviewTracks').hidden = false;
+      $('reviewTracks').href = 'tracks.html?base='+encodeURIComponent(resultBase);
     }
     if (preview.state === 'saving') $('connection').textContent = 'Saving recording…';
     if (active && preview.base) {
@@ -203,7 +205,7 @@ $('stop').onclick = () => action('command', {action:'stop'});
 $('record').onclick = () => action('command', {action:'record', duration_s:Number($('duration').value)});
 $('range').onclick = () => action('command', {action:'range', min_depth_m:Number($('near').value), max_depth_m:Number($('far').value), foreground_only:$('foreground').checked});
 $('foreground').onchange = () => $('range').click();
-$('track').onclick = () => action('start', {session:$('sessions').value, camera:$('camera').value});
+$('track').onclick = () => action('start', {session:$('sessions').value, camera:$('camera').value, full_recording:$('trackingMode').value==='full'});
 $('sessions').onchange = renderCameras;
 $('showTracks').onclick = showTracks;
 $('showOverlap').onclick = () => {

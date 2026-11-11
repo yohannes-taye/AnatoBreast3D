@@ -16,7 +16,8 @@ from anatomy_guided_recon3d.tracking.sequence import prepare_frame, save_sequenc
 
 
 def capture_recorded(session: Path, output: Path, camera_id: str | None, config_path: Path,
-                     settings: dict, skip: int = 0, mask_path: Path | None = None) -> Path:
+                     settings: dict, skip: int = 0, mask_path: Path | None = None,
+                     full_recording: bool = False, sample_fps: float = 5.) -> Path:
     from anatomy_guided_recon3d.calibration.io import load_extrinsics
     from anatomy_guided_recon3d.cli import load_recon_config
     from anatomy_guided_recon3d.sensors.femto_bolt import OrbbecBagCamera, ReplayRGBDCamera
@@ -49,10 +50,13 @@ def capture_recorded(session: Path, output: Path, camera_id: str | None, config_
     if camera_id not in extrinsics:
         raise ValueError(f"No saved calibration for {camera_id}")
     count, stride = int(settings["frames"]), int(settings["stride"])
-    if not 2 <= count <= 96 or not 1 <= stride <= 30 or skip < 0:
-        raise ValueError("Use 2–96 frames, stride 1–30, and a nonnegative skip")
+    if not 2 <= count <= 300 or not 1 <= stride <= 30 or skip < 0 or not 1 <= sample_fps <= 15:
+        raise ValueError("Use 2–300 frames, stride 1–30, sample rate 1–15 fps, and a nonnegative skip")
     raw_frames = []
     previous = -1
+    interval_ns = int(1e9 / sample_fps)
+    first_timestamp = None
+    next_sample = None
     camera.start()
     try:
         index = 0
@@ -62,11 +66,18 @@ def capture_recorded(session: Path, output: Path, camera_id: str | None, config_
             except StopIteration:
                 break
             index += 1
-            if index <= skip or (index - skip - 1) % stride:
+            if index <= skip or (not full_recording and (index - skip - 1) % stride):
                 continue
             if frame.timestamp_ns <= previous:
                 continue
+            if first_timestamp is None:
+                first_timestamp = frame.timestamp_ns
+                next_sample = first_timestamp
+            if full_recording and frame.timestamp_ns < next_sample:
+                continue
             raw_frames.append(frame)
+            if full_recording:
+                next_sample = first_timestamp + ((frame.timestamp_ns-first_timestamp)//interval_ns+1)*interval_ns
             previous = frame.timestamp_ns
             status(output, "preparing", f"Read {len(raw_frames)} of {count} RGB-D frames", frames=len(raw_frames), camera=camera_id)
     finally:
@@ -111,20 +122,37 @@ def main() -> None:
     parser.add_argument("--skip", type=int, default=0)
     parser.add_argument("--mask", type=Path, help="Optional first-frame breast mask, otherwise use breast segmentation")
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument("--full-recording", action="store_true", help="Track a sampled timeline across the saved recording")
+    parser.add_argument("--sample-fps", type=float, default=5., help="Source-time sample rate for --full-recording")
+    parser.add_argument("--max-frames", type=int, default=300, help="Bound the sampled timeline, at most 300 frames")
+    parser.add_argument("--max-side", type=int, help="Longest input image side; default 384 for a full recording")
+    parser.add_argument("--points", type=int, help="Maximum initial breast-surface query points, up to 1024")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     try:
         settings = read_settings(args.settings)
         check_paths(settings)
+        if args.full_recording:
+            settings["frames"] = args.max_frames
+            settings["max_side"] = args.max_side or 384
+        elif args.max_side:
+            settings["max_side"] = args.max_side
+        if args.points:
+            settings["max_points"] = args.points
+        settings.setdefault("encoder_chunk_size", 8)
+        settings["full_recording"] = args.full_recording
+        settings["sample_fps"] = args.sample_fps if args.full_recording else None
+        settings["seed_source"] = ("prepared input queries" if args.input else
+                                   "supplied first-frame mask" if args.mask else "breast segmentation")
+        effective_settings = args.out / "effective_settings.json"
+        effective_settings.write_text(json.dumps(settings, indent=2), encoding="utf-8")
         source_path = args.input or capture_recorded(args.session, args.out, args.camera, args.config,
-                                                     settings, args.skip, args.mask)
+                                                     settings, args.skip, args.mask, args.full_recording, args.sample_fps)
         if args.prepare_only:
             status(args.out, "prepared", "RGB-D sequence prepared", input=str(source_path))
             return
         command = [settings["python"], "-m", "anatomy_guided_recon3d.tracking.worker", "--input", str(source_path.resolve()),
-                   "--out", str(args.out.resolve())]
-        if args.settings:
-            command += ["--settings", str(args.settings.resolve())]
+                   "--out", str(args.out.resolve()), "--settings", str(effective_settings.resolve())]
         subprocess.run(command, cwd=PROJECT_ROOT, check=True)
     except Exception as exc:
         # Preserve the worker's more specific error, if it already published one.

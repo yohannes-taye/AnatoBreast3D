@@ -139,6 +139,10 @@ celerybeat.pid
 # Environments
 .env
 .venv
+
+# Local tracking dependencies, recordings, and workstation-specific paths.
+third_party/TAPIP3D/
+configs/tracking/*.local.json
 env/
 venv/
 ENV/

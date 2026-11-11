@@ -554,7 +554,10 @@ class ViewerHandler(SimpleHTTPRequestHandler):
             if self.path == "/api/point-tracking/start":
                 payload = self._read_json()
                 session = _resolve_replay_session(self._project_root(), str(payload.get("session") or ""))
-                self._send_json(point_tracking.start_tracking(self._project_root(), session, payload.get("camera")))
+                full_recording = payload.get("full_recording", True)
+                if not isinstance(full_recording, bool):
+                    raise ValueError("full_recording must be true or false")
+                self._send_json(point_tracking.start_tracking(self._project_root(), session, payload.get("camera"), full_recording))
                 return
             if self.path == "/api/active-learning/annotation":
                 self._send_json(save_annotation(self._project_root(), self._read_json()))
