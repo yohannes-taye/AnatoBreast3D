@@ -46,9 +46,9 @@ visible breast surface and its anatomical anchors so that patient-specific 3D
 coordinates can be updated as the breast is positioned or manipulated.
 
 **Current stage.** Inter-view alignment is *rigid* (nipple-anchored, robust
-point-to-plane ICP). Non-rigid deformation estimation is not implemented yet; the
-reconstructed surface and fused nipple anchors are the intended inputs to that
-future stage. See [Roadmap](#roadmap).
+point-to-plane ICP). This fork adds offline surface point tracking with TAPIP3D.
+Continuous live deformation tracking and MR overlay integration remain future
+stages. See [Roadmap](#roadmap).
 
 This repository is a research prototype for technical evaluation, algorithm
 development, and non-diagnostic visualization. It is not a clinical decision
@@ -103,7 +103,8 @@ extensions on top of this engineering base.
 | Guided fusion, post-fusion cleanup, quality metrics | implemented |
 | Live viewer + active-learning loop | implemented |
 | Optional TSDF fusion | present, off by default |
-| **Non-rigid deformation estimation / surface tracking** | not implemented |
+| Recorded surface point tracking with TAPIP3D | implemented in this fork |
+| Continuous live deformation tracking | future stage |
 | MR headset overlay integration | not implemented |
 | Clinical workflow validation | not implemented |
 
@@ -119,7 +120,8 @@ extensions on top of this engineering base.
   -> multi-view point-cloud fusion and optional surface cleanup
   -> patient-specific breast surface map
   -> live browser visualization and active-learning annotation
-  -> [future] deformation-aware tracking / MR overlay coordinates
+  -> recorded surface point tracking with TAPIP3D
+  -> [future] continuous live tracking / MR overlay coordinates
 ```
 
 The mathematical back-projection for each valid masked depth pixel is:
